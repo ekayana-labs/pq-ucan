@@ -14,6 +14,7 @@ pub mod delegation;
 pub mod did;
 pub mod envelope;
 mod error;
+pub mod invocation;
 pub mod nonce;
 pub mod policy;
 pub mod rng;
