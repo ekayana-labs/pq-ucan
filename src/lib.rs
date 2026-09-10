@@ -14,6 +14,7 @@ pub mod did;
 pub mod envelope;
 mod error;
 pub mod nonce;
+pub mod policy;
 pub mod rng;
 pub mod time;
 pub mod varsig;
