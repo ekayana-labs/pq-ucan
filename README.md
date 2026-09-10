@@ -1,8 +1,10 @@
 # pq-ucan
 
 [![CI](https://github.com/ekayana-labs/pq-ucan/actions/workflows/main.yml/badge.svg)](https://github.com/ekayana-labs/pq-ucan/actions/workflows/main.yml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.90.0-blue)](rust-toolchain.toml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/pq-ucan.svg)](https://crates.io/crates/pq-ucan)
+[![docs.rs](https://img.shields.io/docsrs/pq-ucan)](https://docs.rs/pq-ucan)
+[![MSRV](https://img.shields.io/crates/msrv/pq-ucan)](Cargo.toml)
+[![license](https://img.shields.io/crates/l/pq-ucan)](LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ekayana-labs/pq-ucan/badge)](https://scorecard.dev/viewer/?uri=github.com/ekayana-labs/pq-ucan)
 
 UCAN 1.0 for Rust: delegation, invocation, the policy language, and

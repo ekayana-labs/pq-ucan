@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-10
+
+First release.
+
 ### Added
 
 - Strict DAG-CBOR codec: canonical encoding, a decoder that refuses
