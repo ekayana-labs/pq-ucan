@@ -11,6 +11,7 @@ pub mod codec;
 pub mod command;
 pub mod crypto;
 pub mod did;
+pub mod envelope;
 mod error;
 pub mod nonce;
 pub mod rng;
