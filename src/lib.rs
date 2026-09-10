@@ -6,4 +6,6 @@
 
 extern crate alloc;
 
+pub mod cid;
+
 pub use ipld_core::{cid::Cid, ipld::Ipld};
