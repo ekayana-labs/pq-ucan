@@ -8,5 +8,8 @@ extern crate alloc;
 
 pub mod cid;
 pub mod codec;
+mod error;
+pub mod time;
 
+pub use error::Error;
 pub use ipld_core::{cid::Cid, ipld::Ipld};
