@@ -10,6 +10,7 @@ pub mod cid;
 pub mod codec;
 pub mod command;
 pub mod crypto;
+pub mod delegation;
 pub mod did;
 pub mod envelope;
 mod error;
