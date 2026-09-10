@@ -15,6 +15,10 @@ use crate::did::Did;
 
 #[cfg(feature = "ed25519")]
 pub mod ed25519;
+#[cfg(feature = "p256")]
+pub mod p256;
+#[cfg(feature = "secp256k1")]
+pub mod secp256k1;
 
 /// A signature algorithm the crate knows how to name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -306,6 +310,10 @@ mod backend {
         match algorithm {
             #[cfg(feature = "ed25519")]
             Algorithm::Ed25519 => super::ed25519::key_is_valid(bytes),
+            #[cfg(feature = "p256")]
+            Algorithm::P256 => super::p256::key_is_valid(bytes),
+            #[cfg(feature = "secp256k1")]
+            Algorithm::Secp256k1 => super::secp256k1::key_is_valid(bytes),
             // ML-DSA public keys have no invalid encodings of the right
             // length, so the length check upstream is the whole check.
             #[allow(unreachable_patterns)]
@@ -323,6 +331,10 @@ mod backend {
         match algorithm {
             #[cfg(feature = "ed25519")]
             Algorithm::Ed25519 => super::ed25519::verify(key, message, signature),
+            #[cfg(feature = "p256")]
+            Algorithm::P256 => super::p256::verify(key, message, signature),
+            #[cfg(feature = "secp256k1")]
+            Algorithm::Secp256k1 => super::secp256k1::verify(key, message, signature),
             #[allow(unreachable_patterns)]
             other => Err(CryptoError::Unsupported(other)),
         }
