@@ -8,7 +8,10 @@ extern crate alloc;
 
 pub mod cid;
 pub mod codec;
+pub mod command;
 mod error;
+pub mod nonce;
+pub mod rng;
 pub mod time;
 
 pub use error::Error;
