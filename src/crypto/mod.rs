@@ -15,6 +15,8 @@ use crate::did::Did;
 
 #[cfg(feature = "ed25519")]
 pub mod ed25519;
+#[cfg(feature = "ml-dsa")]
+pub mod ml_dsa;
 #[cfg(feature = "p256")]
 pub mod p256;
 #[cfg(feature = "secp256k1")]
@@ -335,6 +337,10 @@ mod backend {
             Algorithm::P256 => super::p256::verify(key, message, signature),
             #[cfg(feature = "secp256k1")]
             Algorithm::Secp256k1 => super::secp256k1::verify(key, message, signature),
+            #[cfg(feature = "ml-dsa")]
+            Algorithm::MlDsa44 | Algorithm::MlDsa65 | Algorithm::MlDsa87 => {
+                super::ml_dsa::verify(algorithm, key, message, signature)
+            }
             #[allow(unreachable_patterns)]
             other => Err(CryptoError::Unsupported(other)),
         }
