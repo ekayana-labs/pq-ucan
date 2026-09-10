@@ -1,11 +1,20 @@
 use thiserror::Error;
 
 use crate::{
-    codec::CodecError, command::CommandError, crypto::CryptoError, did::DidError,
-    did::ResolveError, envelope::EnvelopeError, time::Timestamp, varsig::VarsigError,
+    codec::CodecError,
+    command::CommandError,
+    crypto::CryptoError,
+    did::{DidError, ResolveError},
+    envelope::EnvelopeError,
+    policy::PolicyError,
+    time::Timestamp,
+    varsig::VarsigError,
 };
 
 /// Anything that stops a token from being built, decoded or verified.
+///
+/// Chain validation has its own error, [`crate::validate::ValidationError`],
+/// because it needs to say which hop failed.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -32,6 +41,10 @@ pub enum Error {
     /// A command string does not parse.
     #[error("command: {0}")]
     Command(#[from] CommandError),
+
+    /// A policy does not parse.
+    #[error("policy: {0}")]
+    Policy(#[from] PolicyError),
 
     /// A key, signature, or algorithm problem.
     #[error("crypto: {0}")]
