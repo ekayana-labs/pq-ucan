@@ -9,6 +9,8 @@ extern crate alloc;
 pub mod cid;
 pub mod codec;
 pub mod command;
+pub mod crypto;
+pub mod did;
 mod error;
 pub mod nonce;
 pub mod rng;
