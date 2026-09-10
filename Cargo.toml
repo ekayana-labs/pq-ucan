@@ -1,0 +1,64 @@
+[package]
+name = "pq-ucan"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90.0"
+description = "UCAN 1.0 delegation, invocation and proof chain validation with classical and post-quantum did:key principals (Ed25519, P-256, secp256k1, ML-DSA), over a strict DAG-CBOR codec"
+license = "MIT"
+repository = "https://github.com/ekayana-labs/pq-ucan"
+readme = "README.md"
+keywords = ["ucan", "capabilities", "post-quantum", "ml-dsa", "did"]
+categories = ["cryptography", "authentication", "no-std"]
+exclude = [".github/"]
+
+[dependencies]
+bs58 = { version = "0.5", default-features = false, features = ["alloc"] }
+cid = { version = "0.11", default-features = false, features = ["alloc"] }
+ipld-core = { version = "0.4", default-features = false }
+rand_core = { version = "0.10", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+thiserror = { version = "2", default-features = false }
+
+getrandom = { version = "0.4", features = ["sys_rng"], optional = true }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "rand_core", "zeroize"], optional = true }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"], optional = true }
+k256 = { version = "0.14", default-features = false, features = ["ecdsa"], optional = true }
+aws-lc-rs = { version = "1.18", optional = true }
+
+[dev-dependencies]
+getrandom = { version = "0.4", features = ["sys_rng"] }
+hex = "0.4"
+ipld-core = { version = "0.4", features = ["serde"] }
+serde_ipld_dagcbor = "0.7"
+
+[features]
+default = ["std", "ed25519", "p256", "secp256k1"]
+std = ["bs58/std", "cid/std", "ipld-core/std", "thiserror/std", "dep:getrandom", "getrandom/std"]
+ed25519 = ["dep:ed25519-dalek"]
+p256 = ["dep:p256"]
+secp256k1 = ["dep:k256"]
+# aws-lc-rs needs a C toolchain, so post-quantum stays opt in.
+ml-dsa = ["std", "dep:aws-lc-rs"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+# Every error enum documents its variants; an `# Errors` section on each
+# fallible function would repeat them.
+missing_errors_doc = "allow"
+similar_names = "allow"
+struct_field_names = "allow"
+module_name_repetitions = "allow"
