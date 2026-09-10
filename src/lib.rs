@@ -15,6 +15,7 @@ mod error;
 pub mod nonce;
 pub mod rng;
 pub mod time;
+pub mod varsig;
 
 pub use error::Error;
 pub use ipld_core::{cid::Cid, ipld::Ipld};
