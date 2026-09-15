@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::{
     cid, codec,
-    crypto::{CryptoError, PublicKey, Signature, Signer},
+    crypto::{Algorithm, CryptoError, PublicKey, Signature, Signer},
     did::Did,
     error::PayloadError,
     time::Timestamp,
@@ -87,18 +87,36 @@ impl Envelope {
     /// under the strict rules so that what the signer holds is exactly what
     /// a verifier will see.
     pub(crate) fn seal(signer: &dyn Signer, kind: TokenKind, payload: Ipld) -> Result<Self, Error> {
-        let header = Header::new(signer.public_key().algorithm());
+        let signed = Self::signing_bytes(signer.public_key().algorithm(), kind, payload)?;
+        let signature = signer.sign(&signed)?;
+        Self::assemble(&signed, signature.as_bytes()).map(|(envelope, _)| envelope)
+    }
+
+    /// The bytes a signature must cover to seal `payload` as `kind` under
+    /// `algorithm`: the envelope's second element, exactly as a verifier
+    /// will see it. A signer held elsewhere (a wallet, a browser key) signs
+    /// these and the token is put together with [`Envelope::assemble`].
+    pub(crate) fn signing_bytes(
+        algorithm: Algorithm,
+        kind: TokenKind,
+        payload: Ipld,
+    ) -> Result<Vec<u8>, Error> {
+        let header = Header::new(algorithm);
         let mut sig_payload = BTreeMap::new();
         sig_payload.insert(String::from("h"), Ipld::Bytes(header.encode()));
         sig_payload.insert(String::from(kind.tag()), payload);
-        let signed = codec::encode(&Ipld::Map(sig_payload))?;
-        let signature = signer.sign(&signed)?;
+        Ok(codec::encode(&Ipld::Map(sig_payload))?)
+    }
 
-        let mut bytes = Vec::with_capacity(3 + signature.as_bytes().len() + signed.len());
+    /// Assemble `[signature, signed]` and decode it under the strict rules.
+    /// The signature is not checked here; verify the token against its
+    /// issuer's key afterwards.
+    pub(crate) fn assemble(signed: &[u8], signature: &[u8]) -> Result<(Self, Ipld), Error> {
+        let mut bytes = Vec::with_capacity(3 + signature.len() + signed.len());
         codec::head(4, 2, &mut bytes);
-        codec::bytes_item(signature.as_bytes(), &mut bytes);
-        bytes.extend_from_slice(&signed);
-        Self::open(&bytes, DecodeOptions::STRICT).map(|(envelope, _)| envelope)
+        codec::bytes_item(signature, &mut bytes);
+        bytes.extend_from_slice(signed);
+        Self::open(&bytes, DecodeOptions::STRICT)
     }
 
     /// Parse an envelope and return it with its payload.

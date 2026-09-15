@@ -235,7 +235,17 @@ impl Invocation {
 
     /// Decode with the given allowances.
     pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Self, Error> {
-        let (envelope, payload) = Envelope::open(bytes, options)?;
+        Self::from_parts(Envelope::open(bytes, options)?)
+    }
+
+    /// The token for signing bytes from [`InvocationBuilder::prepare`] and
+    /// the signature a key produced over them. The signature is not checked
+    /// here: verify the result with [`Invocation::verify`] or validate it.
+    pub fn assemble(signing_bytes: &[u8], signature: &[u8]) -> Result<Self, Error> {
+        Self::from_parts(Envelope::assemble(signing_bytes, signature)?)
+    }
+
+    fn from_parts((envelope, payload): (Envelope, Ipld)) -> Result<Self, Error> {
         if envelope.kind() != TokenKind::Invocation {
             return Err(EnvelopeError::WrongKind {
                 expected: TokenKind::Invocation,
@@ -511,12 +521,12 @@ impl<const EXPIRY: bool> InvocationBuilder<EXPIRY, false> {
 
 impl InvocationBuilder<true, true> {
     /// Sign with `signer`, whose DID becomes the issuer.
-    pub fn sign(self, signer: &impl Signer) -> Result<Invocation, Error> {
+    fn payload(self, issuer: Did) -> InvocationPayload {
         let audience = self
             .audience
             .filter(|aud| !aud.same_principal(&self.subject));
-        let payload = InvocationPayload {
-            issuer: signer.did(),
+        InvocationPayload {
+            issuer,
             subject: self.subject,
             audience,
             command: self.command,
@@ -527,8 +537,44 @@ impl InvocationBuilder<true, true> {
             expiration: self.expiry.unwrap_or(Expiry::Never),
             issued_at: self.issued_at,
             cause: self.cause,
-        };
+        }
+    }
+
+    /// Sign with `signer`, whose DID becomes the issuer.
+    pub fn sign(self, signer: &impl Signer) -> Result<Invocation, Error> {
+        let payload = self.payload(signer.did());
         let envelope = Envelope::seal(signer, TokenKind::Invocation, payload.to_ipld())?;
         Ok(Invocation { envelope, payload })
+    }
+
+    /// Prepare the token for a signer held elsewhere: `issuer` is its DID
+    /// and `algorithm` the signature it produces. Sign
+    /// [`UnsignedInvocation::signing_bytes`] with that key and finish with
+    /// [`Invocation::assemble`].
+    pub fn prepare(self, issuer: Did, algorithm: Algorithm) -> Result<UnsignedInvocation, Error> {
+        let payload = self.payload(issuer);
+        let bytes = Envelope::signing_bytes(algorithm, TokenKind::Invocation, payload.to_ipld())?;
+        Ok(UnsignedInvocation { bytes })
+    }
+}
+
+/// An invocation waiting for its signature: the exact bytes the issuer's
+/// key must sign. See [`InvocationBuilder::prepare`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsignedInvocation {
+    bytes: Vec<u8>,
+}
+
+impl UnsignedInvocation {
+    /// The bytes to sign.
+    #[must_use]
+    pub fn signing_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The bytes to sign, owned.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }

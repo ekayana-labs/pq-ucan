@@ -1,6 +1,6 @@
 //! Delegations: signed, attenuable grants of authority.
 
-use alloc::{collections::BTreeMap, string::String};
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
 use ipld_core::{cid::Cid, ipld::Ipld};
 
@@ -226,7 +226,17 @@ impl Delegation {
 
     /// Decode with the given allowances.
     pub fn decode_with(bytes: &[u8], options: DecodeOptions) -> Result<Self, Error> {
-        let (envelope, payload) = Envelope::open(bytes, options)?;
+        Self::from_parts(Envelope::open(bytes, options)?)
+    }
+
+    /// The token for signing bytes from [`DelegationBuilder::prepare`] and
+    /// the signature a key produced over them. The signature is not checked
+    /// here: verify the result with [`Delegation::verify`].
+    pub fn assemble(signing_bytes: &[u8], signature: &[u8]) -> Result<Self, Error> {
+        Self::from_parts(Envelope::assemble(signing_bytes, signature)?)
+    }
+
+    fn from_parts((envelope, payload): (Envelope, Ipld)) -> Result<Self, Error> {
         if envelope.kind() != TokenKind::Delegation {
             return Err(EnvelopeError::WrongKind {
                 expected: TokenKind::Delegation,
@@ -426,10 +436,9 @@ impl<const EXPIRY: bool> DelegationBuilder<EXPIRY, false> {
 }
 
 impl DelegationBuilder<true, true> {
-    /// Sign with `signer`, whose DID becomes the issuer.
-    pub fn sign(self, signer: &impl Signer) -> Result<Delegation, Error> {
-        let payload = DelegationPayload {
-            issuer: signer.did(),
+    fn payload(self, issuer: Did) -> DelegationPayload {
+        DelegationPayload {
+            issuer,
             audience: self.audience,
             subject: self.subject,
             command: self.command,
@@ -438,8 +447,44 @@ impl DelegationBuilder<true, true> {
             meta: self.meta,
             not_before: self.not_before,
             expiration: self.expiry.unwrap_or(Expiry::Never),
-        };
+        }
+    }
+
+    /// Sign with `signer`, whose DID becomes the issuer.
+    pub fn sign(self, signer: &impl Signer) -> Result<Delegation, Error> {
+        let payload = self.payload(signer.did());
         let envelope = Envelope::seal(signer, TokenKind::Delegation, payload.to_ipld())?;
         Ok(Delegation { envelope, payload })
+    }
+
+    /// Prepare the token for a signer held elsewhere, such as a wallet or a
+    /// key in a browser: `issuer` is its DID and `algorithm` the signature it
+    /// produces. Sign [`UnsignedDelegation::signing_bytes`] with that key
+    /// and finish with [`Delegation::assemble`].
+    pub fn prepare(self, issuer: Did, algorithm: Algorithm) -> Result<UnsignedDelegation, Error> {
+        let payload = self.payload(issuer);
+        let bytes = Envelope::signing_bytes(algorithm, TokenKind::Delegation, payload.to_ipld())?;
+        Ok(UnsignedDelegation { bytes })
+    }
+}
+
+/// A delegation waiting for its signature: the exact bytes the issuer's key
+/// must sign. See [`DelegationBuilder::prepare`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsignedDelegation {
+    bytes: Vec<u8>,
+}
+
+impl UnsignedDelegation {
+    /// The bytes to sign.
+    #[must_use]
+    pub fn signing_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The bytes to sign, owned.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }
