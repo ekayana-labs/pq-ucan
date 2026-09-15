@@ -70,6 +70,28 @@ A builder takes no issuer: the signer's DID is the issuer, so a token whose
 `iss` does not match its key cannot exist. It will not sign until an expiry
 and a nonce have been chosen; both are decisions, not defaults.
 
+When the key lives elsewhere, in a wallet or a browser, `prepare` gives the
+exact bytes to sign and `assemble` builds the token from their signature;
+the result is byte for byte what `sign` would have produced:
+
+```rust
+# use pq_ucan::{command::Command, crypto::{ed25519::Ed25519Keypair, Algorithm, Signer},
+#     delegation::{Delegation, Subject}, did::KeyResolver, nonce::Nonce, time::Timestamp};
+# let mut rng = pq_ucan::rng::system();
+# let wallet = Ed25519Keypair::generate(&mut rng);
+# let bob = Ed25519Keypair::generate(&mut rng);
+# let now = Timestamp::from_unix(1_800_000_000)?;
+let unsigned = Delegation::builder(bob.did(), Subject::Did(wallet.did()), Command::parse("/crud/read")?)
+    .nonce(Nonce::random(&mut rng))
+    .expires_at(now.plus_seconds(3600))
+    .prepare(wallet.did(), Algorithm::Ed25519)?;
+// ... the wallet signs `unsigned.signing_bytes()` ...
+# let signature = wallet.sign(unsigned.signing_bytes())?;
+let grant = Delegation::assemble(unsigned.signing_bytes(), signature.as_bytes())?;
+grant.verify(&KeyResolver)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 Tokens are bytes. `Delegation::decode` and `Invocation::decode` accept the
 released `ucan/…@1.0.0` tags; `decode_with(DecodeOptions::STRICT.release_candidate_tags(true))`
 also accepts the `-rc.1` tags rs-ucan and the JavaScript implementation

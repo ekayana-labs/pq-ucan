@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-17
+
+### Added
+
+- Detached signing for keys the builder never holds, such as a wallet or a
+  key in a browser: `DelegationBuilder::prepare` and
+  `InvocationBuilder::prepare` return the exact bytes to sign
+  (`UnsignedDelegation`, `UnsignedInvocation`), and `Delegation::assemble`
+  and `Invocation::assemble` build the token from those bytes and the
+  signature. The result is byte for byte what `sign` produces.
+
 ## [0.1.0] - 2026-09-10
 
 First release.

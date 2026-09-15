@@ -1,6 +1,6 @@
 [package]
 name = "pq-ucan"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.90.0"
 description = "UCAN 1.0 delegation, invocation and proof chain validation with classical and post-quantum did:key principals (Ed25519, P-256, secp256k1, ML-DSA), over a strict DAG-CBOR codec"
