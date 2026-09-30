@@ -39,7 +39,7 @@ stops at the first failure. Positions are `Hop(n)` for the n-th proof
 | 9 | Signatures           | Every hop's signature and the invocation signature verify under their issuer's resolved key.           | `BadSignature(hop)`, `Unresolvable(hop)` |
 | 10 | Policy              | The invocation `args` satisfy every statement of every hop's policy.                                   | `PolicyRejected { hop, statement }` |
 | 11 | Executor            | If the validator was given its own DID: `aud` when present, else `sub`, equals it.                     | `WrongExecutor`                  |
-| 12 | Replay              | If a `ReplayGuard` is attached, the invocation CID has not been seen. Recorded only after 1–11 pass.  | `Replay`                         |
+| 12 | Replay              | If a `ReplayGuard` is attached, the invocation CID has not been seen. Recorded only after 1-11 pass.  | `Replay`                         |
 
 Ordering rationale: structural failures are cheap and give the best
 diagnostics, so they go first; signatures are the expensive step and

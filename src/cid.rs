@@ -28,7 +28,7 @@ pub fn to_base58btc(cid: &Cid) -> String {
     text
 }
 
-/// Parse the base58btc (`z…`) or base32 (`b…`) text form.
+/// Parse the base58btc (`z...`) or base32 (`b...`) text form.
 pub fn parse(text: &str) -> Result<Cid, CidError> {
     match text.strip_prefix('z') {
         Some(b58) => {

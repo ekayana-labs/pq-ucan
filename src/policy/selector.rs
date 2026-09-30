@@ -342,7 +342,7 @@ pub enum SelectorError {
     #[error("unexpected character at offset {0}")]
     Unexpected(usize),
 
-    /// A `[`"…"`]` segment without its closing quote.
+    /// A `[`"..."`]` segment without its closing quote.
     #[error("unterminated string")]
     UnterminatedString,
 

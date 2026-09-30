@@ -54,6 +54,7 @@ implementing one trait.
 A decoded token keeps the bytes it was decoded from. The signature is
 checked over the received `SigPayload` bytes and the CID is computed over
 the received envelope bytes. Nothing is re-encoded in order to verify it.
+Decision 9 covers the one exception.
 
 Re-encoding a parsed value to verify a signature assumes that the encoder
 on both sides agrees on every detail of canonical form. When it does not,
@@ -121,15 +122,37 @@ Everything that parses, encodes, signs, verifies and validates is
 randomness. ML-DSA is behind its own feature because its backend needs a
 C toolchain.
 
+### 9. Wallets may sign text
+
+Users keep their keys in browser wallets, and many wallets sign only UTF-8
+text. A Solana wallet's `signMessage` refuses input that is not UTF-8,
+which rules out the DAG-CBOR `SigPayload`. A second key kept only for
+UCANs would defeat the point of a wallet identity.
+
+Varsig already names the payload encoding a signature covers. When the
+header names DAG-JSON, the signer signs the canonical DAG-JSON text of
+`.1` and the verifier encodes the received `.1` as DAG-JSON to check it.
+The token on the wire and its CID stay DAG-CBOR.
+
+This is the one place the crate re-encodes to verify, which decision 2
+avoids everywhere else. It holds up here for two reasons. The received
+`.1` is strict DAG-CBOR, so it decodes to exactly one value. The DAG-JSON
+encoder is a pure function of that value and refuses floats and `/` keys,
+the only inputs that have several text forms or share one with another
+value. One token has one text, and one text belongs to one token.
+
+UCAN 1.0 signs DAG-CBOR, so tokens signed as text are an extension in the
+same position as the ML-DSA headers. DAG-CBOR stays the default.
+
 ## Module map
 
 | Module       | Holds                                                              |
 |--------------|--------------------------------------------------------------------|
-| `codec`      | Strict DAG-CBOR encode, decode and scan; unsigned varints          |
+| `codec`      | Strict DAG-CBOR encode, decode and scan, strict DAG-JSON, varints  |
 | `cid`        | CIDv1 over DAG-CBOR and SHA-256; base58btc text form               |
 | `did`        | The `Did` value, `did:key` encoding, the `Resolver` trait          |
 | `crypto`     | `Algorithm`, `PublicKey`, `Signature`, `Signer`, the backends      |
-| `varsig`     | The varsig v1 header                                               |
+| `varsig`     | The varsig v1 header and its payload encoding                      |
 | `command`    | The `Command` path and its attenuation order                       |
 | `time`       | `Timestamp` with the 53-bit bound; `Clock`                         |
 | `nonce`      | `Nonce`                                                            |

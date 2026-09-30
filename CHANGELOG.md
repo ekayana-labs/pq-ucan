@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-01
+
+### Added
+
+- Signatures over DAG-JSON for wallets that sign only UTF-8 text. A varsig
+  header can name DAG-JSON as its payload encoding
+  (`Header::with_encoding(Encoding::DagJson)`). With that header
+  `DelegationBuilder::prepare_with` and `InvocationBuilder::prepare_with`
+  return the payload's canonical DAG-JSON text to sign, and `assemble`
+  accepts that text. Tokens stay DAG-CBOR on the wire. UCAN 1.0 signs
+  DAG-CBOR, so this is an extension.
+- `UnsignedDelegation::sig_payload` and `UnsignedInvocation::sig_payload`,
+  the envelope's second element for a client that assembles the token
+  itself.
+- `to_dag_json` on `Envelope`, `Delegation` and `Invocation`, for logs and
+  debugging.
+- `codec::json`, a strict DAG-JSON codec.
+
+### Changed
+
+- A varsig header whose payload encoding is DAG-JSON now decodes instead of
+  failing with `UnsupportedEncoding`.
+
 ## [0.1.1] - 2026-09-17
 
 ### Added

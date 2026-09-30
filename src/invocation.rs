@@ -563,9 +563,8 @@ impl InvocationBuilder<true, true> {
         self.prepare_with(issuer, Header::new(algorithm))
     }
 
-    /// Prepare for a signer whose header names another payload encoding. A
-    /// wallet that signs only text takes
-    /// `Header::new(Algorithm::Ed25519).with_encoding(Encoding::DagJson)`.
+    /// Prepare for a signer whose header names another payload encoding. See
+    /// [`DelegationBuilder::prepare_with`](crate::delegation::DelegationBuilder::prepare_with).
     pub fn prepare_with(self, issuer: Did, header: Header) -> Result<UnsignedInvocation, Error> {
         let payload = self.payload(issuer);
         Envelope::prepare(header, TokenKind::Invocation, payload.to_ipld()).map(UnsignedInvocation)

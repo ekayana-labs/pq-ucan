@@ -57,7 +57,7 @@ impl Did {
         &self.0
     }
 
-    /// The method name, `key` in `did:key:z…`.
+    /// The method name, `key` in `did:key:z...`.
     #[must_use]
     pub fn method(&self) -> &str {
         self.base()

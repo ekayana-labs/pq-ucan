@@ -4,7 +4,7 @@ use core::fmt;
 
 use thiserror::Error;
 
-/// Seconds since the Unix epoch, within `±(2^53 - 1)`.
+/// Seconds since the Unix epoch, within `+/-(2^53 - 1)`.
 ///
 /// The bound comes from the specification: JavaScript cannot represent
 /// integers beyond it, so a timestamp outside it is invalid everywhere.
@@ -134,7 +134,7 @@ impl Clock for SystemClock {
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TimeError {
-    /// Outside `±(2^53 - 1)`.
+    /// Outside `+/-(2^53 - 1)`.
     #[error("timestamp outside the 53-bit range")]
     OutOfRange,
 }

@@ -474,8 +474,30 @@ impl DelegationBuilder<true, true> {
     }
 
     /// Prepare for a signer whose header names another payload encoding. A
-    /// wallet that signs only text takes
-    /// `Header::new(Algorithm::Ed25519).with_encoding(Encoding::DagJson)`.
+    /// wallet that signs only UTF-8 text signs the payload as DAG-JSON.
+    ///
+    /// ```
+    /// # use pq_ucan::{command::Command, crypto::{ed25519::Ed25519Keypair, Algorithm, Signer},
+    /// #     delegation::{Delegation, Subject}, did::KeyResolver, nonce::Nonce, time::Timestamp,
+    /// #     varsig::{Encoding, Header}};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut rng = pq_ucan::rng::system();
+    /// # let wallet = Ed25519Keypair::generate(&mut rng);
+    /// # let bob = Ed25519Keypair::generate(&mut rng);
+    /// # let now = Timestamp::from_unix(1_800_000_000)?;
+    /// let text = Header::new(Algorithm::Ed25519).with_encoding(Encoding::DagJson);
+    /// let unsigned = Delegation::builder(bob.did(), Subject::Did(wallet.did()), Command::parse("/crud/read")?)
+    ///     .nonce(Nonce::random(&mut rng))
+    ///     .expires_at(now.plus_seconds(3600))
+    ///     .prepare_with(wallet.did(), text)?;
+    /// let message = std::str::from_utf8(unsigned.signing_bytes())?;
+    /// assert!(message.starts_with(r#"{"h":"#));
+    /// # let signature = wallet.sign(message.as_bytes())?;
+    /// let grant = Delegation::assemble(message.as_bytes(), signature.as_bytes())?;
+    /// grant.verify(&KeyResolver)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn prepare_with(self, issuer: Did, header: Header) -> Result<UnsignedDelegation, Error> {
         let payload = self.payload(issuer);
         Envelope::prepare(header, TokenKind::Delegation, payload.to_ipld()).map(UnsignedDelegation)

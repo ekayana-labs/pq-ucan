@@ -19,9 +19,9 @@ chain.
 
 | Algorithm | `did:key` | Varsig | Feature      |
 |-----------|-----------|--------|--------------|
-| Ed25519   | `z6Mk…`   | spec   | `ed25519`    |
-| ES256     | `zDn…`    | spec   | `p256`       |
-| ES256K    | `zQ3s…`   | spec   | `secp256k1`  |
+| Ed25519   | `z6Mk...` | spec   | `ed25519`    |
+| ES256     | `zDn...`  | spec   | `p256`       |
+| ES256K    | `zQ3s...` | spec   | `secp256k1`  |
 | ML-DSA-44 / 65 / 87 (FIPS 204) | registered multicodec | provisional | `ml-dsa` |
 
 The core is `no_std` with `alloc`. `std` adds the system clock and the
@@ -92,8 +92,38 @@ grant.verify(&KeyResolver)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+Some wallets sign only UTF-8 text. A Solana wallet's `signMessage` refuses
+binary input, so it cannot sign the DAG-CBOR payload. For such a wallet
+`prepare_with` takes a header that names DAG-JSON and returns the payload's
+canonical DAG-JSON text to sign.
+
+```rust
+# use pq_ucan::{command::Command, crypto::{ed25519::Ed25519Keypair, Algorithm, Signer},
+#     delegation::{Delegation, Subject}, did::KeyResolver, nonce::Nonce, time::Timestamp,
+#     varsig::{Encoding, Header}};
+# let mut rng = pq_ucan::rng::system();
+# let wallet = Ed25519Keypair::generate(&mut rng);
+# let bob = Ed25519Keypair::generate(&mut rng);
+# let now = Timestamp::from_unix(1_800_000_000)?;
+let text = Header::new(Algorithm::Ed25519).with_encoding(Encoding::DagJson);
+let unsigned = Delegation::builder(bob.did(), Subject::Did(wallet.did()), Command::parse("/crud/read")?)
+    .nonce(Nonce::random(&mut rng))
+    .expires_at(now.plus_seconds(3600))
+    .prepare_with(wallet.did(), text)?;
+// ... the wallet signs `unsigned.signing_bytes()`, JSON that starts `{"h":` ...
+# let signature = wallet.sign(unsigned.signing_bytes())?;
+let grant = Delegation::assemble(unsigned.signing_bytes(), signature.as_bytes())?;
+grant.verify(&KeyResolver)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The token is still DAG-CBOR on the wire and its CID is taken over those
+bytes. The header tells a verifier to check the signature over the text
+form. UCAN 1.0 signs DAG-CBOR, so other implementations may refuse these
+tokens. See [docs/wire-format.md](docs/wire-format.md#signing-as-text).
+
 Tokens are bytes. `Delegation::decode` and `Invocation::decode` accept the
-released `ucan/…@1.0.0` tags; `decode_with(DecodeOptions::STRICT.release_candidate_tags(true))`
+released `ucan/...@1.0.0` tags; `decode_with(DecodeOptions::STRICT.release_candidate_tags(true))`
 also accepts the `-rc.1` tags rs-ucan and the JavaScript implementation
 emit.
 

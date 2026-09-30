@@ -5,6 +5,7 @@ Normative references: [UCAN 1.0.0](https://github.com/ucan-wg/spec),
 [UCAN Invocation 1.0.0](https://github.com/ucan-wg/invocation),
 [Varsig 1.0.0](https://github.com/ChainAgnostic/varsig),
 [DAG-CBOR](https://ipld.io/specs/codecs/dag-cbor/spec/),
+[DAG-JSON](https://ipld.io/specs/codecs/dag-json/spec/),
 [did:key](https://w3c-ccg.github.io/did-key-spec/),
 [multicodec](https://github.com/multiformats/multicodec/blob/master/table.csv).
 
@@ -17,15 +18,17 @@ Every token is a DAG-CBOR array of two elements.
 
 | Position | Type    | Content                                                  |
 |----------|---------|----------------------------------------------------------|
-| `.0`     | bytes   | Signature by the payload's `iss` over the bytes of `.1`  |
+| `.0`     | bytes   | Signature by the payload's `iss` over `.1`               |
 | `.1`     | map     | `SigPayload`: exactly two keys                           |
 | `.1.h`   | bytes   | Varsig v1 header                                         |
 | `.1.<tag>` | map   | The token payload; `<tag>` names the token type          |
 
-The signature covers the DAG-CBOR bytes of the whole `SigPayload` map,
-header included. This was checked against the working group's fixture:
-the signature verifies over `.1` and does not verify over the payload map
-alone.
+The signature covers the whole `SigPayload` map, header included. By
+default it covers the DAG-CBOR bytes of `.1` as received. A header that
+names DAG-JSON makes it cover the text form instead, as set out in
+[Signing as text](#signing-as-text). The DAG-CBOR case was checked against
+the working group's fixture. The signature verifies over `.1` and does not
+verify over the payload map alone.
 
 Tags:
 
@@ -49,10 +52,10 @@ token; the structure is identical):
     48 34 01 ed 01 ed 01 13 71            bytes(8): varsig header
     73 "ucan/dlg@1.0.0-rc.1"             tag
     a9                                    map(9): payload
-      63 "aud" 78 38 "did:key:z6Mkf…"
+      63 "aud" 78 38 "did:key:z6Mkf..."
       63 "cmd" 61 "/"
       63 "exp" f6                           null
-      63 "iss" 78 38 "did:key:z6Mkr…"
+      63 "iss" 78 38 "did:key:z6Mkr..."
       63 "nbf" 1a 69 24 f1 a7               1764028839
       63 "pol" 80                           []
       63 "sub" f6                           null (powerline)
@@ -63,8 +66,10 @@ token; the structure is identical):
 ## Varsig headers
 
 A header is `0x34 0x01` followed by unsigned varint segments: the
-signature algorithm and its parameters, then the payload encoding. Every
-token here uses DAG-CBOR (`0x71`) as the payload encoding.
+signature algorithm and its parameters, then the payload encoding. The
+payload encoding is DAG-CBOR (`0x71`), or DAG-JSON (`0x0129`) for a signer
+that signs text. The table shows DAG-CBOR. Over DAG-JSON the last segment
+becomes `a9 02`, so Ed25519 is `34 01 ed 01 ed 01 13 a9 02`.
 
 | Algorithm  | Segments after `34 01`                              | Header bytes                |
 |------------|-----------------------------------------------------|-----------------------------|
@@ -76,7 +81,8 @@ token here uses DAG-CBOR (`0x71`) as the payload encoding.
 | ML-DSA-87  | `mldsa-87-pub` `0x1212`                             | `34 01 92 24 71`            |
 
 Varints: `0xed` encodes as `ed 01`, `0xec` as `ec 01`, `0xe7` as `e7 01`,
-`0x1200` as `80 24`, `0x1210` as `90 24`. Values below `0x80` are one byte.
+`0x1200` as `80 24`, `0x1210` as `90 24`, `0x0129` as `a9 02`. Values
+below `0x80` are one byte.
 
 The ML-DSA headers are an extension. The varsig registry has no entry for
 ML-DSA; the crate uses the registered public key multicodec as the tag
@@ -90,8 +96,8 @@ Signature bytes:
 | Algorithm | Length | Form                     |
 |-----------|--------|--------------------------|
 | Ed25519   | 64     | RFC 8032                 |
-| ES256     | 64     | `r ‖ s`, fixed width     |
-| ES256K    | 64     | `r ‖ s`, fixed width     |
+| ES256     | 64     | `r` and `s`, fixed width |
+| ES256K    | 64     | `r` and `s`, fixed width |
 | ML-DSA-44 | 2420   | FIPS 204                 |
 | ML-DSA-65 | 3309   | FIPS 204                 |
 | ML-DSA-87 | 4627   | FIPS 204                 |
@@ -166,11 +172,52 @@ validator does not understand may carry meaning another validator would
 enforce, and silently dropping it would let the two disagree about what
 was signed.
 
+## Signing as text
+
+Some wallets sign only UTF-8 text. A Solana wallet's `signMessage` refuses
+input that is not valid UTF-8, and a DAG-CBOR `SigPayload` never is. For
+such a signer the header names DAG-JSON (`0x0129`) as the payload encoding
+and the signature covers the canonical DAG-JSON text of `.1`.
+
+Nothing else changes. The envelope is the same DAG-CBOR array, `.1` holds
+the same DAG-CBOR map, and the CID is taken over the envelope bytes. A
+verifier decodes `.1`, encodes that value as DAG-JSON, and checks the
+signature over the result.
+
+The encoder emits canonical DAG-JSON and the decoder accepts nothing else.
+
+- No whitespace.
+- Map keys sorted bytewise. DAG-CBOR sorts by length first.
+- Strings escape `"`, `\` and control characters only. `\n`, `\r`, `\t`,
+  `\b` and `\f` use their short forms, other control characters `\u`
+  with four lowercase hex digits.
+- Integers in decimal, in the DAG-CBOR range.
+- Bytes as `{"/":{"bytes":"<base64>"}}`, standard alphabet, no padding.
+- Links as `{"/":"<cid>"}`.
+
+Floats are refused because their text form differs between
+implementations. A map key of `/` is refused because it would read as
+bytes or a link. Without them each `SigPayload` has one text form and each
+text decodes to one `SigPayload`, so a signature over the text binds one
+token.
+
+The delegation in `tests/text.rs` signs this text. In the DAG-CBOR `.1`
+the same keys sort with `nonce` last.
+
+```
+{"h":{"/":{"bytes":"NAHtAe0BE6kC"}},"ucan/dlg@1.0.0":{"aud":"did:key:z6Mkfmm57fsb6VL7zVusP8zeA9SYkCKdvUhby2G7Yh8vvQ1P","cmd":"/file/read","exp":1800003600,"iss":"did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z","nonce":{"/":{"bytes":"AQEBAQEBAQEBAQEB"}},"pol":[],"sub":"did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z"}}
+```
+
+UCAN 1.0 signs the DAG-CBOR encoding, so this is an extension. Varsig
+registers DAG-JSON as a payload encoding and the header describes itself,
+but other UCAN implementations may refuse these tokens. Like the ML-DSA
+headers, it is meant for deployments that control both ends.
+
 ## CIDs
 
 CIDv1, codec `dag-cbor` (`0x71`), multihash `sha2-256` (`0x12`), computed
 over the complete envelope bytes. The text form is multibase `base58btc`
-and begins with `zdpu`. The decoder also accepts the base32 (`b…`) form.
+and begins with `zdpu`. The decoder also accepts the base32 (`b...`) form.
 
 ## `did:key`
 
@@ -201,3 +248,6 @@ the string and ignored when principals are compared.
 - The multicodec table also registers `eddsa` as `0xd0ed` and `es256` as
   `0xd01200`. Varsig 1.0.0 uses `0xed` and `0xec`, and so do the fixtures
   in circulation. The crate uses the varsig values.
+- A token signed as text carries a DAG-JSON header, and an implementation
+  that verifies over DAG-CBOR alone will reject it. The crate signs
+  DAG-CBOR unless asked otherwise.
