@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::{
     cid, codec,
-    crypto::{Algorithm, CryptoError, PublicKey, Signature, Signer},
+    crypto::{CryptoError, PublicKey, Signature, Signer},
     did::Did,
     error::PayloadError,
     time::Timestamp,
@@ -82,6 +82,15 @@ pub struct Envelope {
     kind: TokenKind,
 }
 
+/// A token waiting for its signature. `signing` is what the key signs,
+/// `sig_payload` the envelope's second element as DAG-CBOR. They are the
+/// same bytes unless the header names DAG-JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Unsigned {
+    pub(crate) signing: Vec<u8>,
+    pub(crate) sig_payload: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 enum Signed {
     Cbor(Range<usize>),
@@ -93,35 +102,46 @@ impl Envelope {
     /// under the strict rules so that what the signer holds is exactly what
     /// a verifier will see.
     pub(crate) fn seal(signer: &dyn Signer, kind: TokenKind, payload: Ipld) -> Result<Self, Error> {
-        let signed = Self::signing_bytes(signer.public_key().algorithm(), kind, payload)?;
-        let signature = signer.sign(&signed)?;
-        Self::assemble(&signed, signature.as_bytes()).map(|(envelope, _)| envelope)
+        let unsigned = Self::prepare(Header::new(signer.public_key().algorithm()), kind, payload)?;
+        let signature = signer.sign(&unsigned.signing)?;
+        Self::assemble(&unsigned.sig_payload, signature.as_bytes()).map(|(envelope, _)| envelope)
     }
 
-    /// The bytes a signature must cover to seal `payload` as `kind` under
-    /// `algorithm`: the envelope's second element, exactly as a verifier
-    /// will see it. A signer held elsewhere (a wallet, a browser key) signs
-    /// these and the token is put together with [`Envelope::assemble`].
-    pub(crate) fn signing_bytes(
-        algorithm: Algorithm,
+    /// What a key held elsewhere signs to seal `payload` as `kind` under
+    /// `header`, with the envelope element the signature goes with.
+    pub(crate) fn prepare(
+        header: Header,
         kind: TokenKind,
         payload: Ipld,
-    ) -> Result<Vec<u8>, Error> {
-        let header = Header::new(algorithm);
-        let mut sig_payload = BTreeMap::new();
-        sig_payload.insert(String::from("h"), Ipld::Bytes(header.encode()));
-        sig_payload.insert(String::from(kind.tag()), payload);
-        Ok(codec::encode(&Ipld::Map(sig_payload))?)
+    ) -> Result<Unsigned, Error> {
+        let value = sig_payload(&header.encode(), kind.tag(), payload);
+        let sig_payload = codec::encode(&value)?;
+        let signing = match header.encoding() {
+            Encoding::DagCbor => sig_payload.clone(),
+            Encoding::DagJson => codec::json::encode(&value)?.into_bytes(),
+        };
+        Ok(Unsigned {
+            signing,
+            sig_payload,
+        })
     }
 
-    /// Assemble `[signature, signed]` and decode it under the strict rules.
-    /// The signature is not checked here; verify the token against its
-    /// issuer's key afterwards.
+    /// Assemble `[signature, sig_payload]` and decode it under the strict
+    /// rules. `signed` is the envelope's second element as DAG-CBOR, or the
+    /// DAG-JSON text a text signer signed. The signature is not checked
+    /// here. Verify the token against its issuer's key afterwards.
     pub(crate) fn assemble(signed: &[u8], signature: &[u8]) -> Result<(Self, Ipld), Error> {
-        let mut bytes = Vec::with_capacity(3 + signature.len() + signed.len());
+        let converted;
+        let sig_payload = if signed.first() == Some(&b'{') {
+            converted = codec::encode(&codec::json::decode(signed)?)?;
+            converted.as_slice()
+        } else {
+            signed
+        };
+        let mut bytes = Vec::with_capacity(3 + signature.len() + sig_payload.len());
         codec::head(4, 2, &mut bytes);
         codec::bytes_item(signature, &mut bytes);
-        bytes.extend_from_slice(signed);
+        bytes.extend_from_slice(sig_payload);
         Self::open(&bytes, DecodeOptions::STRICT)
     }
 

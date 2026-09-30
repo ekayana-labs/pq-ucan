@@ -9,10 +9,11 @@ use crate::{
     command::Command,
     crypto::{Algorithm, Signature, Signer},
     did::{Did, Resolver},
-    envelope::{self, DecodeOptions, Envelope, EnvelopeError, Fields, TokenKind},
+    envelope::{self, DecodeOptions, Envelope, EnvelopeError, Fields, TokenKind, Unsigned},
     error::PayloadError,
     nonce::Nonce,
     time::{self, Expiry, Timestamp},
+    varsig::Header,
     Error,
 };
 
@@ -239,8 +240,10 @@ impl Invocation {
     }
 
     /// The token for signing bytes from [`InvocationBuilder::prepare`] and
-    /// the signature a key produced over them. The signature is not checked
-    /// here: verify the result with [`Invocation::verify`] or validate it.
+    /// the signature a key produced over them.
+    /// [`UnsignedInvocation::sig_payload`] also works in place of the signing
+    /// bytes. The signature is not checked here. Verify the result with
+    /// [`Invocation::verify`] or validate it.
     pub fn assemble(signing_bytes: &[u8], signature: &[u8]) -> Result<Self, Error> {
         Self::from_parts(Envelope::assemble(signing_bytes, signature)?)
     }
@@ -552,29 +555,40 @@ impl InvocationBuilder<true, true> {
     /// [`UnsignedInvocation::signing_bytes`] with that key and finish with
     /// [`Invocation::assemble`].
     pub fn prepare(self, issuer: Did, algorithm: Algorithm) -> Result<UnsignedInvocation, Error> {
+        self.prepare_with(issuer, Header::new(algorithm))
+    }
+
+    /// Prepare for a signer whose header names another payload encoding. A
+    /// wallet that signs only text takes
+    /// `Header::new(Algorithm::Ed25519).with_encoding(Encoding::DagJson)`.
+    pub fn prepare_with(self, issuer: Did, header: Header) -> Result<UnsignedInvocation, Error> {
         let payload = self.payload(issuer);
-        let bytes = Envelope::signing_bytes(algorithm, TokenKind::Invocation, payload.to_ipld())?;
-        Ok(UnsignedInvocation { bytes })
+        Envelope::prepare(header, TokenKind::Invocation, payload.to_ipld()).map(UnsignedInvocation)
     }
 }
 
-/// An invocation waiting for its signature: the exact bytes the issuer's
-/// key must sign. See [`InvocationBuilder::prepare`].
+/// An invocation waiting for its signature. See [`InvocationBuilder::prepare`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnsignedInvocation {
-    bytes: Vec<u8>,
-}
+pub struct UnsignedInvocation(Unsigned);
 
 impl UnsignedInvocation {
     /// The bytes to sign.
     #[must_use]
     pub fn signing_bytes(&self) -> &[u8] {
-        &self.bytes
+        &self.0.signing
     }
 
     /// The bytes to sign, owned.
     #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
-        self.bytes
+        self.0.signing
+    }
+
+    /// The envelope's second element as DAG-CBOR. A signer that assembles
+    /// the token itself writes `[signature, sig_payload]`. Under DAG-CBOR
+    /// these are the signing bytes.
+    #[must_use]
+    pub fn sig_payload(&self) -> &[u8] {
+        &self.0.sig_payload
     }
 }
