@@ -356,7 +356,7 @@ mod tests {
 
     use alloc::{collections::BTreeMap, format, string::String, vec};
 
-    use ipld_core::ipld::Ipld;
+    use ipld_core::{cid::Cid, ipld::Ipld};
 
     use super::{decode, encode};
     use crate::codec::CodecError;
@@ -494,6 +494,35 @@ mod tests {
         assert_eq!(decode(br#"{"a":1,"a":1}"#), Err(CodecError::DuplicateKey));
         assert_eq!(decode(b"[1]x"), Err(CodecError::TrailingBytes));
         assert_eq!(decode(b"\"a"), Err(CodecError::UnexpectedEnd));
+    }
+
+    // serde_json reads integers below i64::MIN as floats, so the samples
+    // stay above it.
+    #[test]
+    fn agrees_with_serde_ipld_dagjson() {
+        let link = crate::cid::of_dag_cbor(b"x");
+        let values = [
+            Ipld::Integer(i128::from(i64::MIN)),
+            Ipld::Integer(i128::from(u64::MAX)),
+            Ipld::String("tab\t quote\" bell\u{7} del\u{7f} sep\u{2028} a/b \u{1f600}".into()),
+            Ipld::Bytes((0..=255u8).collect()),
+            Ipld::Link(Cid::new_v0(*link.hash()).unwrap()),
+            map(&[
+                ("", Ipld::Null),
+                ("a", Ipld::List(vec![Ipld::Bool(false), Ipld::Integer(-1)])),
+                ("bb", Ipld::Bytes(vec![1, 2])),
+                ("c", Ipld::Link(link)),
+                ("\u{e9}", map(&[("z", Ipld::Bytes(vec![]))])),
+            ]),
+        ];
+        for value in &values {
+            let ours = encode(value).unwrap();
+            let theirs = serde_ipld_dagjson::to_vec(value).unwrap();
+            assert_eq!(ours.as_bytes(), theirs.as_slice(), "{ours}");
+            assert_eq!(&decode(&theirs).unwrap(), value);
+            let back: Ipld = serde_ipld_dagjson::from_slice(ours.as_bytes()).unwrap();
+            assert_eq!(&back, value);
+        }
     }
 
     #[test]

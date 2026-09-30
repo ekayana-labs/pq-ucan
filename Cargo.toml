@@ -30,6 +30,7 @@ getrandom = { version = "0.4", features = ["sys_rng"] }
 hex = "0.4"
 ipld-core = { version = "0.4", features = ["serde"] }
 serde_ipld_dagcbor = "0.7"
+serde_ipld_dagjson = "0.2"
 
 [features]
 default = ["std", "ed25519", "p256", "secp256k1"]

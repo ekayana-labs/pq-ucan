@@ -107,6 +107,10 @@ fn a_token_presents_as_dag_json_and_back() {
     assert!(text.contains(r#""nbf":1764028839,"nonce":{"/":{"bytes":"VkDFeab+58p8SMpW"}}"#));
     let value = codec::json::decode(text.as_bytes()).unwrap();
     assert_eq!(codec::encode(&value).unwrap(), fixture());
+    assert_eq!(
+        text.as_bytes(),
+        serde_ipld_dagjson::to_vec(&value).unwrap().as_slice()
+    );
 
     // A float has no canonical text form, so a token holding one has no
     // presentation.
