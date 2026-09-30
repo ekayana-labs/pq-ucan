@@ -1,0 +1,319 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1290" width="960" height="1290" role="img" aria-labelledby="t d">
+<title id="t">How pq-ucan works</title>
+<desc id="d">A delegation chain from Alice to Bob to Carol, the byte layout of a token, the supported signature algorithms and signing paths, and the twelve checks the validator runs on an invocation.</desc>
+<style>
+svg {
+  --bg: #ffffff; --panel: #f6f8fa; --head: #eaeef2; --line: #d0d7de;
+  --text: #1f2328; --muted: #59636e;
+  --blue: #0969da; --green: #1a7f37; --purple: #8250df;
+  --orange: #bc4c00; --teal: #0a7b83; --red: #cf222e;
+}
+@media (prefers-color-scheme: dark) {
+  svg {
+    --bg: #0d1117; --panel: #161b22; --head: #21262d; --line: #30363d;
+    --text: #e6edf3; --muted: #9198a1;
+    --blue: #4493f8; --green: #3fb950; --purple: #ab7df8;
+    --orange: #f0883e; --teal: #39c5cf; --red: #f85149;
+  }
+}
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--text); font-size: 12.5px; }
+.mono, .mono tspan { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.h1 { font-size: 22px; font-weight: 700; }
+.h2 { font-size: 15px; font-weight: 700; }
+.b { font-weight: 700; }
+.sm { font-size: 11px; }
+.muted { fill: var(--muted); }
+.k { fill: var(--muted); font-size: 12px; }
+.v { font-size: 12px; }
+.bg { fill: var(--bg); }
+.panel { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.head { fill: var(--head); }
+.rule { stroke: var(--line); stroke-width: 1; }
+.blue { fill: var(--blue); } .green { fill: var(--green); } .purple { fill: var(--purple); }
+.orange { fill: var(--orange); } .teal { fill: var(--teal); } .red { fill: var(--red); }
+.s-blue { stroke: var(--blue); } .s-green { stroke: var(--green); } .s-purple { stroke: var(--purple); }
+.s-orange { stroke: var(--orange); } .s-teal { stroke: var(--teal); } .s-muted { stroke: var(--muted); }
+.arrow { fill: none; stroke-width: 2; }
+.dash { fill: none; stroke-width: 1.5; stroke-dasharray: 5 4; }
+.pill { fill: none; stroke-width: 1.2; }
+.bar { stroke-width: 3; }
+</style>
+<defs>
+  <marker id="m-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="blue"/></marker>
+  <marker id="m-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="green"/></marker>
+  <marker id="m-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="orange"/></marker>
+  <marker id="m-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="muted"/></marker>
+</defs>
+
+<rect class="bg" x="0" y="0" width="960" height="1290" rx="12"/>
+
+<text class="h1" x="30" y="46">pq-ucan: how a UCAN chain carries authority</text>
+<text class="muted" x="30" y="72" style="font-size:13.5px">Delegations hand a capability down a chain of did:key principals. An invocation exercises it. The executor validates the whole chain before acting.</text>
+
+<!-- 1. Chain -->
+<text class="h2" x="30" y="106">1  Delegate, attenuate, invoke</text>
+
+<!-- principals -->
+<g>
+  <rect class="panel" x="30" y="118" width="270" height="50" rx="8"/>
+  <text class="b" x="44" y="139" style="font-size:14px">Alice</text>
+  <text class="sm muted" x="90" y="139">owns the resource</text>
+  <text class="mono sm muted" x="44" y="158">did:key:z6Mk...</text>
+  <rect class="pill s-muted" x="208" y="130" width="78" height="20" rx="10"/>
+  <text class="sm" x="247" y="144" text-anchor="middle">Ed25519</text>
+
+  <rect class="panel" x="345" y="118" width="270" height="50" rx="8"/>
+  <text class="b" x="359" y="139" style="font-size:14px">Bob</text>
+  <text class="sm teal" x="390" y="139">post-quantum</text>
+  <text class="mono sm muted" x="359" y="158">did:key:z...</text>
+  <rect class="pill s-teal" x="513" y="130" width="88" height="20" rx="10"/>
+  <text class="sm teal b" x="557" y="144" text-anchor="middle">ML-DSA-65</text>
+
+  <rect class="panel" x="660" y="118" width="270" height="50" rx="8"/>
+  <text class="b" x="674" y="139" style="font-size:14px">Carol</text>
+  <text class="sm muted" x="716" y="139">wants to read a photo</text>
+  <text class="mono sm muted" x="674" y="158">did:key:zDn...</text>
+  <rect class="pill s-muted" x="838" y="130" width="78" height="20" rx="10"/>
+  <text class="sm" x="877" y="144" text-anchor="middle">ES256</text>
+
+  <path class="arrow s-muted" d="M165,168 V197" marker-end="url(#m-muted)" style="stroke-width:1.5"/>
+  <text class="sm muted" x="173" y="189">signs</text>
+  <path class="arrow s-muted" d="M480,168 V197" marker-end="url(#m-muted)" style="stroke-width:1.5"/>
+  <text class="sm muted" x="488" y="189">signs</text>
+  <path class="arrow s-muted" d="M795,168 V197" marker-end="url(#m-muted)" style="stroke-width:1.5"/>
+  <text class="sm muted" x="803" y="189">signs</text>
+</g>
+
+<!-- Delegation 0 -->
+<g>
+  <rect class="panel" x="30" y="200" width="270" height="240" rx="8"/>
+  <path class="head" d="M38,200 H292 A8,8 0 0 1 300,208 V230 H30 V208 A8,8 0 0 1 38,200 z"/>
+  <text class="b" x="44" y="220">Delegation 0</text>
+  <text class="mono sm muted" x="286" y="220" text-anchor="end">ucan/dlg@1.0.0</text>
+  <text class="mono k" x="44" y="252">iss</text><text class="mono v blue" x="92" y="252">Alice</text>
+  <text class="mono k" x="44" y="272">aud</text><text class="mono v blue" x="92" y="272">Bob</text>
+  <text class="mono k" x="44" y="292">sub</text><text class="mono v purple" x="92" y="292">Alice</text>
+  <text class="mono k" x="44" y="312">cmd</text><text class="mono v green" x="92" y="312">/crud</text>
+  <text class="mono k" x="44" y="332">pol</text><text class="mono v orange" x="92" y="332">[]</text>
+  <text class="mono k" x="44" y="352">exp</text><text class="mono v" x="92" y="352">now + 1h</text>
+  <text class="mono k" x="44" y="372">nonce</text><text class="mono v" x="92" y="372">12 random bytes</text>
+  <line class="rule" x1="30" y1="406" x2="300" y2="406"/>
+  <text class="mono sm" x="44" y="427">CID zdpu...A</text>
+  <text class="sm muted" x="286" y="427" text-anchor="end">root: iss is the subject</text>
+</g>
+
+<!-- Delegation 1 -->
+<g>
+  <rect class="panel" x="345" y="200" width="270" height="240" rx="8"/>
+  <path class="head" d="M353,200 H607 A8,8 0 0 1 615,208 V230 H345 V208 A8,8 0 0 1 353,200 z"/>
+  <text class="b" x="359" y="220">Delegation 1</text>
+  <text class="mono sm muted" x="601" y="220" text-anchor="end">ucan/dlg@1.0.0</text>
+  <text class="mono k" x="359" y="252">iss</text><text class="mono v blue" x="407" y="252">Bob</text>
+  <text class="mono k" x="359" y="272">aud</text><text class="mono v blue" x="407" y="272">Carol</text>
+  <text class="mono k" x="359" y="292">sub</text><text class="mono v purple" x="407" y="292">Alice</text>
+  <text class="mono k" x="359" y="312">cmd</text><text class="mono v green" x="407" y="312">/crud/read</text>
+  <text class="mono k" x="359" y="332">pol</text><text class="mono v orange" x="407" y="332">[["like", ".path",</text>
+  <text class="mono v orange" x="407" y="352">  "/photos/*"]]</text>
+  <text class="mono k" x="359" y="372">exp</text><text class="mono v" x="407" y="372">now + 10m</text>
+  <text class="mono k" x="359" y="392">nonce</text><text class="mono v" x="407" y="392">12 random bytes</text>
+  <line class="rule" x1="345" y1="406" x2="615" y2="406"/>
+  <text class="mono sm" x="359" y="427">CID zdpu...B</text>
+  <text class="sm muted" x="601" y="427" text-anchor="end">narrower command, a policy</text>
+</g>
+
+<!-- Invocation -->
+<g>
+  <rect class="panel" x="660" y="200" width="270" height="240" rx="8"/>
+  <path class="head" d="M668,200 H922 A8,8 0 0 1 930,208 V230 H660 V208 A8,8 0 0 1 668,200 z"/>
+  <text class="b" x="674" y="220">Invocation</text>
+  <text class="mono sm muted" x="916" y="220" text-anchor="end">ucan/inv@1.0.0</text>
+  <text class="mono k" x="674" y="252">iss</text><text class="mono v blue" x="722" y="252">Carol</text>
+  <text class="mono k" x="674" y="272">sub</text><text class="mono v purple" x="722" y="272">Alice</text>
+  <text class="mono k" x="674" y="292">cmd</text><text class="mono v green" x="722" y="292">/crud/read</text>
+  <text class="mono k" x="674" y="312">args</text><text class="mono v orange" x="722" y="312">{"path":</text>
+  <text class="mono v orange" x="722" y="332">  "/photos/cat.jpg"}</text>
+  <text class="mono k" x="674" y="352">prf</text><text class="mono v" x="722" y="352">[zdpu...A, zdpu...B]</text>
+  <text class="mono k" x="674" y="372">exp</text><text class="mono v" x="722" y="372">now + 60s</text>
+  <text class="mono k" x="674" y="392">nonce</text><text class="mono v" x="722" y="392">12 random bytes</text>
+  <line class="rule" x1="660" y1="406" x2="930" y2="406"/>
+  <text class="mono sm" x="674" y="427">CID zdpu...C</text>
+  <text class="sm muted" x="916" y="427" text-anchor="end">executor: sub, as no aud</text>
+</g>
+
+<!-- alignment arrows -->
+<path class="arrow s-blue" d="M300,268 C322,268 322,248 342,248" marker-end="url(#m-blue)"/>
+<path class="arrow s-green" d="M300,308 H342" marker-end="url(#m-green)"/>
+<path class="arrow s-blue" d="M615,268 C637,268 637,248 657,248" marker-end="url(#m-blue)"/>
+<path class="arrow s-green" d="M615,308 C637,308 637,288 657,288" marker-end="url(#m-green)"/>
+<path class="arrow s-orange" d="M615,338 C637,338 637,318 657,318" marker-end="url(#m-orange)"/>
+
+<!-- prf back references -->
+<path class="dash s-muted" d="M795,440 V466 H165 V445" marker-end="url(#m-muted)"/>
+<path class="dash s-muted" d="M480,466 V445" marker-end="url(#m-muted)"/>
+<text class="sm muted" x="480" y="488" text-anchor="middle">prf names each delegation by CID, root first. The executor looks them up in its own store; a missing one fails with MissingProof.</text>
+
+<!-- legend -->
+<line class="bar s-blue" x1="30" y1="516" x2="52" y2="516"/>
+<text x="62" y="520">aud of each hop is the iss of the next</text>
+<line class="bar s-green" x1="480" y1="516" x2="502" y2="516"/>
+<text x="512" y="520">each cmd covers the next, on segment boundaries</text>
+<line class="bar s-purple" x1="30" y1="540" x2="52" y2="540"/>
+<text x="62" y="544">sub stays Alice: only the resource owner can be the root</text>
+<line class="bar s-orange" x1="480" y1="540" x2="502" y2="540"/>
+<text x="512" y="544">every hop's pol must hold for the invocation args</text>
+
+<!-- 2. Token anatomy -->
+<text class="h2" x="30" y="592">2  Anatomy of a token</text>
+<g>
+  <rect class="panel" x="30" y="606" width="440" height="260" rx="8"/>
+  <text class="mono b" x="46" y="628">[ .0, .1 ]</text>
+  <text class="sm muted" x="130" y="628">DAG-CBOR array(2), strict in both directions</text>
+
+  <rect class="bg" x="46" y="640" width="408" height="44" rx="6" style="stroke:var(--line)"/>
+  <text class="b" x="60" y="658"><tspan class="mono">.0</tspan>  signature</text>
+  <text class="sm muted" x="60" y="675">by iss, over the bytes of .1, header included</text>
+
+  <rect class="bg" x="46" y="694" width="408" height="158" rx="6" style="stroke:var(--line)"/>
+  <text class="b" x="60" y="713"><tspan class="mono">.1</tspan>  SigPayload</text>
+  <text class="sm muted" x="160" y="713">a map with exactly two keys</text>
+
+  <rect class="panel" x="62" y="724" width="376" height="46" rx="5"/>
+  <text class="b sm" x="74" y="741"><tspan class="mono">h</tspan>  varsig header</text>
+  <text class="mono sm" x="74" y="760"><tspan class="muted">34 01</tspan> <tspan class="blue">ed 01 ed 01 13</tspan> <tspan class="green">71</tspan></text>
+  <text class="sm muted" x="250" y="760"><tspan class="blue">algorithm</tspan>, then <tspan class="green">encoding</tspan></text>
+
+  <rect class="panel" x="62" y="778" width="376" height="64" rx="5"/>
+  <text class="b sm" x="74" y="795"><tspan class="mono">"ucan/dlg@1.0.0"</tspan>  payload</text>
+  <text class="mono sm" x="74" y="814">iss aud sub cmd pol nbf exp nonce meta</text>
+  <text class="sm muted" x="74" y="832">an invocation is tagged ucan/inv and adds args, prf</text>
+</g>
+<text x="30" y="890"><tspan class="b">CID</tspan> = CIDv1(dag-cbor, sha2-256(token bytes)), printed as <tspan class="mono">zdpu...</tspan></text>
+<text class="sm muted" x="30" y="910">Decoded tokens keep their bytes. Signatures and CIDs are checked over</text>
+<text class="sm muted" x="30" y="926">what was received, never over a re-encoding.</text>
+
+<!-- 3. Algorithms and signing -->
+<text class="h2" x="500" y="592">3  Algorithms and signing paths</text>
+<g>
+  <rect class="panel" x="500" y="606" width="430" height="150" rx="8"/>
+  <text class="sm b muted" x="514" y="624">Algorithm</text>
+  <text class="sm b muted" x="612" y="624">varsig header</text>
+  <text class="sm b muted" x="916" y="624" text-anchor="end">sig bytes</text>
+  <line class="rule" x1="500" y1="631" x2="930" y2="631"/>
+  <text x="514" y="649">Ed25519</text><text class="mono sm" x="612" y="649">34 01 ed 01 ed 01 13 71</text><text class="mono sm" x="916" y="649" text-anchor="end">64</text>
+  <text x="514" y="669">ES256</text><text class="mono sm" x="612" y="669">34 01 ec 01 80 24 12 71</text><text class="mono sm" x="916" y="669" text-anchor="end">64</text>
+  <text x="514" y="689">ES256K</text><text class="mono sm" x="612" y="689">34 01 ec 01 e7 01 12 71</text><text class="mono sm" x="916" y="689" text-anchor="end">64</text>
+  <line class="rule" x1="500" y1="697" x2="930" y2="697"/>
+  <text class="teal" x="514" y="714">ML-DSA-44</text><text class="mono sm teal" x="612" y="714">34 01 90 24 71</text><text class="mono sm teal" x="916" y="714" text-anchor="end">2420</text>
+  <text class="teal" x="514" y="732">ML-DSA-65</text><text class="mono sm teal" x="612" y="732">34 01 91 24 71</text><text class="mono sm teal" x="916" y="732" text-anchor="end">3309</text>
+  <text class="teal" x="514" y="750">ML-DSA-87</text><text class="mono sm teal" x="612" y="750">34 01 92 24 71</text><text class="mono sm teal" x="916" y="750" text-anchor="end">4627</text>
+  <text class="sm teal" x="740" y="732">FIPS 204, provisional</text>
+</g>
+<text class="sm muted" x="500" y="776">Any mix of these can sign the hops of one chain. ML-DSA headers stay</text>
+<text class="sm muted" x="500" y="792">provisional until the varsig registry assigns tags.</text>
+
+<g>
+  <rect class="panel" x="500" y="806" width="430" height="34" rx="6"/>
+  <text class="mono sm b" x="514" y="827">sign(&amp;keypair)</text>
+  <text class="sm muted" x="916" y="827" text-anchor="end">key held in this process</text>
+  <rect class="panel" x="500" y="846" width="430" height="34" rx="6"/>
+  <text class="mono sm b" x="514" y="867">prepare .. assemble</text>
+  <text class="sm muted" x="916" y="867" text-anchor="end">wallet or browser key, byte-identical token</text>
+  <rect class="panel" x="500" y="886" width="430" height="40" rx="6"/>
+  <text class="mono sm b" x="514" y="910">prepare_with(DagJson)</text>
+  <text class="sm muted" x="916" y="903" text-anchor="end">text-only wallets sign canonical JSON;</text>
+  <text class="sm muted" x="916" y="918" text-anchor="end">header ends <tspan class="mono">a9 02</tspan>, wire stays DAG-CBOR</text>
+</g>
+
+<!-- 4. Validation -->
+<text class="h2" x="30" y="970">4  Validator::validate(invocation)</text>
+<text class="sm muted" x="300" y="970">runs at execution time and stops at the first failure, naming Hop(n) or Invocation</text>
+
+<g>
+  <!-- row 1 -->
+  <rect class="panel" x="30" y="984" width="140" height="86" rx="6"/>
+  <text class="mono sm b muted" x="42" y="1004">01</text>
+  <text class="b" x="42" y="1022" style="font-size:11px">Proofs resolve</text>
+  <text class="sm" x="42" y="1040" style="font-size:10.5px">every prf CID in store</text>
+  <text class="mono sm red" x="42" y="1059" style="font-size:10px">MissingProof</text>
+
+  <rect class="panel" x="182" y="984" width="140" height="86" rx="6"/>
+  <text class="mono sm b muted" x="194" y="1004">02</text>
+  <text class="b" x="194" y="1022" style="font-size:11px">Non-empty chain</text>
+  <text class="sm" x="194" y="1040" style="font-size:10.5px">prf has an entry</text>
+  <text class="mono sm red" x="194" y="1059" style="font-size:10px">EmptyChain</text>
+
+  <rect class="panel" x="334" y="984" width="140" height="86" rx="6"/>
+  <line class="bar s-purple" x1="340" y1="985.5" x2="464" y2="985.5"/>
+  <text class="mono sm b purple" x="346" y="1004">03</text>
+  <text class="b" x="346" y="1022" style="font-size:11px">Root authority</text>
+  <text class="sm" x="346" y="1040" style="font-size:10.5px">Hop(0).iss = inv sub</text>
+  <text class="mono sm red" x="346" y="1059" style="font-size:10px">RootNotSubject</text>
+
+  <rect class="panel" x="486" y="984" width="140" height="86" rx="6"/>
+  <line class="bar s-purple" x1="492" y1="985.5" x2="616" y2="985.5"/>
+  <text class="mono sm b purple" x="498" y="1004">04</text>
+  <text class="b" x="498" y="1022" style="font-size:11px">Powerline placement</text>
+  <text class="sm" x="498" y="1040" style="font-size:10.5px">Hop(0).sub is not null</text>
+  <text class="mono sm red" x="498" y="1059" style="font-size:10px">PowerlineAtRoot</text>
+
+  <rect class="panel" x="638" y="984" width="140" height="86" rx="6"/>
+  <line class="bar s-purple" x1="644" y1="985.5" x2="768" y2="985.5"/>
+  <text class="mono sm b purple" x="650" y="1004">05</text>
+  <text class="b" x="650" y="1022" style="font-size:11px">Subject alignment</text>
+  <text class="sm" x="650" y="1040" style="font-size:10.5px">sub = inv sub, or null</text>
+  <text class="mono sm red" x="650" y="1059" style="font-size:10px">SubjectMismatch</text>
+
+  <rect class="panel" x="790" y="984" width="140" height="86" rx="6"/>
+  <line class="bar s-blue" x1="796" y1="985.5" x2="920" y2="985.5"/>
+  <text class="mono sm b blue" x="802" y="1004">06</text>
+  <text class="b" x="802" y="1022" style="font-size:11px">Principal alignment</text>
+  <text class="sm" x="802" y="1040" style="font-size:10.5px">aud(n) = iss(n+1)</text>
+  <text class="mono sm red" x="802" y="1059" style="font-size:10px">PrincipalMismatch</text>
+
+  <!-- row 2 -->
+  <rect class="panel" x="30" y="1080" width="140" height="86" rx="6"/>
+  <line class="bar s-green" x1="36" y1="1081.5" x2="160" y2="1081.5"/>
+  <text class="mono sm b green" x="42" y="1100">07</text>
+  <text class="b" x="42" y="1118" style="font-size:11px">Command attenuation</text>
+  <text class="sm" x="42" y="1136" style="font-size:10.5px">cmd(n) covers cmd(n+1)</text>
+  <text class="mono sm red" x="42" y="1155" style="font-size:10px">CommandNotCovered</text>
+
+  <rect class="panel" x="182" y="1080" width="140" height="86" rx="6"/>
+  <text class="mono sm b muted" x="194" y="1100">08</text>
+  <text class="b" x="194" y="1118" style="font-size:11px">Time bounds</text>
+  <text class="sm" x="194" y="1136" style="font-size:10.5px">nbf &lt;= now &lt;= exp</text>
+  <text class="mono sm red" x="194" y="1155" style="font-size:10px">Expired, NotYetValid</text>
+
+  <rect class="panel" x="334" y="1080" width="140" height="86" rx="6"/>
+  <line class="bar s-teal" x1="340" y1="1081.5" x2="464" y2="1081.5"/>
+  <text class="mono sm b teal" x="346" y="1100">09</text>
+  <text class="b" x="346" y="1118" style="font-size:11px">Signatures</text>
+  <text class="sm" x="346" y="1136" style="font-size:10.5px">every hop + invocation</text>
+  <text class="mono sm red" x="346" y="1155" style="font-size:10px">BadSignature</text>
+
+  <rect class="panel" x="486" y="1080" width="140" height="86" rx="6"/>
+  <line class="bar s-orange" x1="492" y1="1081.5" x2="616" y2="1081.5"/>
+  <text class="mono sm b orange" x="498" y="1100">10</text>
+  <text class="b" x="498" y="1118" style="font-size:11px">Policy</text>
+  <text class="sm" x="498" y="1136" style="font-size:10.5px">args satisfy every pol</text>
+  <text class="mono sm red" x="498" y="1155" style="font-size:10px">PolicyRejected</text>
+
+  <rect class="panel" x="638" y="1080" width="140" height="86" rx="6"/>
+  <text class="mono sm b muted" x="650" y="1100">11</text>
+  <text class="b" x="650" y="1118" style="font-size:11px">Executor</text>
+  <text class="sm" x="650" y="1136" style="font-size:10.5px">aud, else sub, is me</text>
+  <text class="mono sm red" x="650" y="1155" style="font-size:10px">WrongExecutor</text>
+
+  <rect class="panel" x="790" y="1080" width="140" height="86" rx="6"/>
+  <text class="mono sm b muted" x="802" y="1100">12</text>
+  <text class="b" x="802" y="1118" style="font-size:11px">Replay</text>
+  <text class="sm" x="802" y="1136" style="font-size:10.5px">CID unseen, then kept</text>
+  <text class="mono sm red" x="802" y="1155" style="font-size:10px">Replay</text>
+</g>
+
+<rect class="panel" x="30" y="1182" width="900" height="40" rx="8" style="stroke:var(--green)"/>
+<text x="46" y="1207"><tspan class="mono b green">Ok(Proof)</tspan>  the resolved chain, the effective subject and the invocation. Execute from the Proof, never from the bare invocation.</text>
+
+<text class="sm muted" x="30" y="1250">Order: cheap structural checks first for the best diagnostics. Signatures before policy, so no policy runs on a token nobody signed.</text>
+<text class="sm muted" x="30" y="1268">Replay last, so a rejected invocation never consumes a nonce. Time bounds allow a clock skew, 60 seconds by default.</text>
+</svg>

@@ -27,6 +27,25 @@ chain.
 The core is `no_std` with `alloc`. `std` adds the system clock and the
 system random source. `ml-dsa` needs a C toolchain for `aws-lc-rs`.
 
+## How it works
+
+![A delegation chain from Alice to Bob to Carol, the layout of a token, the signature algorithms and signing paths, and the twelve validation checks](docs/pq-ucan.svg)
+
+A UCAN is a signed token that grants a capability. Alice owns a resource
+and delegates `/crud` to Bob. Bob holds an ML-DSA-65 key and delegates the
+narrower `/crud/read` to Carol, with a policy that limits the path to
+`/photos/*`. Carol invokes `/crud/read` on Alice's resource and names both
+delegations by CID in `prf`. Each token is signed by its own issuer, so one
+chain can carry classical and post-quantum signatures side by side.
+
+Alice's executor runs `Validator::validate` on the invocation. It resolves
+the proofs, checks that authority starts with the subject, that each hop's
+audience is the next hop's issuer, that each command covers the next, that
+every token is inside its time window and correctly signed, and that the
+invocation's arguments satisfy every policy along the chain. A failure names
+the hop and the rule. A success returns a `Proof`, and the executor acts on
+that rather than on the bare invocation.
+
 ## Use
 
 ```rust
