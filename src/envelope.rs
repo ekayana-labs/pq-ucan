@@ -1,8 +1,8 @@
 //! The signed envelope every token type shares.
 //!
 //! `[signature, {"h": varsig, "<tag>": payload}]`. The signature covers the
-//! bytes of the second element exactly as received, which is why an
-//! [`Envelope`] keeps its bytes and the range that was signed.
+//! second element: its bytes exactly as received, or its DAG-JSON form when
+//! the varsig header names DAG-JSON. An [`Envelope`] keeps what was signed.
 
 use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use core::ops::Range;
@@ -16,7 +16,7 @@ use crate::{
     did::Did,
     error::PayloadError,
     time::Timestamp,
-    varsig::Header,
+    varsig::{Encoding, Header},
     Error,
 };
 
@@ -78,8 +78,14 @@ pub struct Envelope {
     cid: Cid,
     header: Header,
     signature: Signature,
-    signed: Range<usize>,
+    signed: Signed,
     kind: TokenKind,
+}
+
+#[derive(Debug, Clone)]
+enum Signed {
+    Cbor(Range<usize>),
+    Json(Arc<[u8]>),
 }
 
 impl Envelope {
@@ -130,8 +136,10 @@ impl Envelope {
         if reader.map_len()? != 2 || reader.text()? != "h" {
             return Err(EnvelopeError::Shape.into());
         }
-        let header = Header::decode(reader.bytes()?)?;
-        let kind = TokenKind::from_tag(reader.text()?, options)?;
+        let header_bytes = reader.bytes()?;
+        let header = Header::decode(header_bytes)?;
+        let tag = reader.text()?;
+        let kind = TokenKind::from_tag(tag, options)?;
         let payload = reader.value()?;
         if !matches!(payload, Ipld::Map(_)) {
             return Err(EnvelopeError::PayloadNotMap.into());
@@ -139,12 +147,18 @@ impl Envelope {
         let signed_end = reader.position();
         reader.finish()?;
         let signature = Signature::new(header.algorithm(), signature_bytes)?;
+        let signed = match header.encoding() {
+            Encoding::DagCbor => Signed::Cbor(signed_start..signed_end),
+            Encoding::DagJson => Signed::Json(Arc::from(
+                codec::json::encode(&sig_payload(header_bytes, tag, payload.clone()))?.into_bytes(),
+            )),
+        };
         let envelope = Envelope {
             bytes: Arc::from(bytes),
             cid: cid::of_dag_cbor(bytes),
             header,
             signature,
-            signed: signed_start..signed_end,
+            signed,
             kind,
         };
         Ok((envelope, payload))
@@ -160,10 +174,10 @@ impl Envelope {
             }
             .into());
         }
-        let signed = self
-            .bytes
-            .get(self.signed.clone())
-            .ok_or(EnvelopeError::Shape)?;
+        let signed = match &self.signed {
+            Signed::Cbor(range) => self.bytes.get(range.clone()).ok_or(EnvelopeError::Shape)?,
+            Signed::Json(text) => text,
+        };
         key.verify(signed, &self.signature)?;
         Ok(())
     }
@@ -224,6 +238,14 @@ pub enum EnvelopeError {
         /// What the tag named.
         found: TokenKind,
     },
+}
+
+// `{"h": header, tag: payload}`, the second element of the envelope.
+fn sig_payload(header: &[u8], tag: &str, payload: Ipld) -> Ipld {
+    let mut map = BTreeMap::new();
+    map.insert(String::from("h"), Ipld::Bytes(header.to_vec()));
+    map.insert(String::from(tag), payload);
+    Ipld::Map(map)
 }
 
 /// The fields of a payload map, consumed one at a time so that anything

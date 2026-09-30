@@ -1,8 +1,8 @@
 //! Varsig v1 headers.
 //!
 //! A header names the signature algorithm and the payload encoding, so a
-//! token says how it was signed. Every token here is DAG-CBOR; the
-//! algorithm segments are tabulated in `docs/wire-format.md`.
+//! token says how it was signed. Tokens travel as DAG-CBOR either way. The
+//! segments are tabulated in `docs/wire-format.md`.
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -17,29 +17,85 @@ use crate::{
 const PREFIX: u8 = 0x34;
 const VERSION: u8 = 0x01;
 const DAG_CBOR: u64 = 0x71;
+const DAG_JSON: u64 = 0x0129;
 
 const EDDSA: u64 = 0xed;
 const ECDSA: u64 = 0xec;
 const SHA2_256: u64 = 0x12;
 const SHA2_512: u64 = 0x13;
 
-/// A varsig header for one algorithm over DAG-CBOR.
+/// The form of the payload a signature covers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Encoding {
+    /// Canonical DAG-CBOR, the form UCAN 1.0 signs.
+    #[default]
+    DagCbor,
+    /// Canonical DAG-JSON, for keys that only sign text, such as browser
+    /// wallets.
+    DagJson,
+}
+
+impl Encoding {
+    const fn code(self) -> u64 {
+        match self {
+            Encoding::DagCbor => DAG_CBOR,
+            Encoding::DagJson => DAG_JSON,
+        }
+    }
+
+    const fn from_code(code: u64) -> Option<Self> {
+        match code {
+            DAG_CBOR => Some(Encoding::DagCbor),
+            DAG_JSON => Some(Encoding::DagJson),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Encoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Encoding::DagCbor => "dag-cbor",
+            Encoding::DagJson => "dag-json",
+        })
+    }
+}
+
+/// A varsig header: the signature algorithm and the payload encoding it
+/// covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Header {
     algorithm: Algorithm,
+    encoding: Encoding,
 }
 
 impl Header {
-    /// The header for `algorithm`.
+    /// The header for `algorithm` over DAG-CBOR.
     #[must_use]
     pub const fn new(algorithm: Algorithm) -> Self {
-        Header { algorithm }
+        Header {
+            algorithm,
+            encoding: Encoding::DagCbor,
+        }
+    }
+
+    /// The same algorithm over `encoding`.
+    #[must_use]
+    pub const fn with_encoding(self, encoding: Encoding) -> Self {
+        Header { encoding, ..self }
     }
 
     /// The algorithm.
     #[must_use]
     pub const fn algorithm(&self) -> Algorithm {
         self.algorithm
+    }
+
+    /// The payload encoding the signature covers.
+    #[must_use]
+    pub const fn encoding(&self) -> Encoding {
+        self.encoding
     }
 
     /// The header bytes.
@@ -51,7 +107,7 @@ impl Header {
         for segment in segments(self.algorithm) {
             put_uvarint(*segment, &mut out);
         }
-        put_uvarint(DAG_CBOR, &mut out);
+        put_uvarint(self.encoding.code(), &mut out);
         out
     }
 
@@ -79,10 +135,12 @@ impl Header {
                 Some(&tag) => VarsigError::UnknownAlgorithm(tag),
                 None => VarsigError::Truncated,
             })?;
-        if *encoding != DAG_CBOR {
-            return Err(VarsigError::UnsupportedEncoding(*encoding));
-        }
-        Ok(Header { algorithm })
+        let encoding =
+            Encoding::from_code(*encoding).ok_or(VarsigError::UnsupportedEncoding(*encoding))?;
+        Ok(Header {
+            algorithm,
+            encoding,
+        })
     }
 }
 
@@ -103,7 +161,7 @@ const fn segments(algorithm: Algorithm) -> &'static [u64] {
 
 impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "varsig({} over dag-cbor)", self.algorithm)
+        write!(f, "varsig({} over {})", self.algorithm, self.encoding)
     }
 }
 
@@ -135,7 +193,7 @@ pub enum VarsigError {
     #[error("unsupported algorithm parameters")]
     UnsupportedParameters,
 
-    /// A payload encoding other than DAG-CBOR.
+    /// A payload encoding other than DAG-CBOR or DAG-JSON.
     #[error("unsupported payload encoding {0:#x}")]
     UnsupportedEncoding(u64),
 }
@@ -163,6 +221,18 @@ mod tests {
     }
 
     #[test]
+    fn dag_json_changes_only_the_last_segment() {
+        let header = Header::new(Algorithm::Ed25519).with_encoding(Encoding::DagJson);
+        assert_eq!(hex::encode(header.encode()), "3401ed01ed0113a902");
+        assert_eq!(Header::decode(&header.encode()).unwrap(), header);
+        assert_eq!(header.to_string(), "varsig(Ed25519 over dag-json)");
+        assert_eq!(
+            Header::new(Algorithm::Ed25519).encoding(),
+            Encoding::DagCbor
+        );
+    }
+
+    #[test]
     fn refuses_what_it_does_not_understand() {
         assert_eq!(
             Header::decode(&[0x35, 0x01, 0xed, 0x01, 0xed, 0x01, 0x13, 0x71]),
@@ -183,10 +253,10 @@ mod tests {
             Header::decode(&[0x34, 0x01, 0x85, 0x24, 0x12, 0x80, 0x02, 0x71]),
             Err(VarsigError::UnknownAlgorithm(0x1205))
         );
-        // Ed25519 over DAG-JSON.
+        // Ed25519 over the raw payload bytes.
         assert_eq!(
-            Header::decode(&[0x34, 0x01, 0xed, 0x01, 0xed, 0x01, 0x13, 0xa9, 0x02]),
-            Err(VarsigError::UnsupportedEncoding(0x0129))
+            Header::decode(&[0x34, 0x01, 0xed, 0x01, 0xed, 0x01, 0x13, 0x5f]),
+            Err(VarsigError::UnsupportedEncoding(0x5f))
         );
         // A varint cut short.
         assert_eq!(
