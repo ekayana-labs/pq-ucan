@@ -269,6 +269,11 @@ impl Delegation {
         &self.envelope
     }
 
+    /// The token as canonical DAG-JSON. See [`Envelope::to_dag_json`].
+    pub fn to_dag_json(&self) -> Result<String, Error> {
+        self.envelope.to_dag_json()
+    }
+
     /// The signed fields.
     #[must_use]
     pub const fn payload(&self) -> &DelegationPayload {

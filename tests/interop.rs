@@ -10,6 +10,7 @@
 
 use pq_ucan::{
     cid,
+    codec::{self, CodecError},
     command::Command,
     crypto::{
         ed25519::Ed25519Keypair, p256::P256Keypair, secp256k1::Secp256k1Keypair, Algorithm, Signer,
@@ -95,6 +96,31 @@ fn a_flipped_byte_still_decodes_but_no_longer_verifies() {
     let dlg = Delegation::decode_with(&bytes, rc1()).unwrap();
     assert_ne!(cid::to_base58btc(dlg.cid()), FIXTURE_CID);
     assert!(matches!(dlg.verify(&KeyResolver), Err(Error::Crypto(_))));
+}
+
+#[test]
+fn a_token_presents_as_dag_json_and_back() {
+    let dlg = Delegation::decode_with(&fixture(), rc1()).unwrap();
+    let text = dlg.to_dag_json().unwrap();
+    assert!(text.starts_with(r#"[{"/":{"bytes":""#), "{text}");
+    assert!(text.contains(r#"{"h":{"/":{"bytes":"NAHtAe0BE3E"}},"ucan/dlg@1.0.0-rc.1":{"aud":"#));
+    assert!(text.contains(r#""nbf":1764028839,"nonce":{"/":{"bytes":"VkDFeab+58p8SMpW"}}"#));
+    let value = codec::json::decode(text.as_bytes()).unwrap();
+    assert_eq!(codec::encode(&value).unwrap(), fixture());
+
+    // A float has no canonical text form, so a token holding one has no
+    // presentation.
+    let alice = Ed25519Keypair::from_seed(&[1; 32]);
+    let inv = Invocation::builder(alice.did(), Command::parse("/crud/read").unwrap())
+        .arg("ratio", Ipld::Float(0.5))
+        .nonce(Nonce::empty())
+        .expires_at(now())
+        .sign(&alice)
+        .unwrap();
+    assert!(matches!(
+        inv.to_dag_json(),
+        Err(Error::Codec(CodecError::FloatInText))
+    ));
 }
 
 #[test]

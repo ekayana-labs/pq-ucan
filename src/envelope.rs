@@ -231,6 +231,13 @@ impl Envelope {
     pub const fn kind(&self) -> TokenKind {
         self.kind
     }
+
+    /// The whole token as canonical DAG-JSON, for logs and debugging. The
+    /// token itself stays DAG-CBOR. A payload that holds a float has no
+    /// text form and fails.
+    pub fn to_dag_json(&self) -> Result<String, Error> {
+        Ok(codec::json::encode(&codec::decode(&self.bytes)?)?)
+    }
 }
 
 /// Why bytes are not a token envelope.
