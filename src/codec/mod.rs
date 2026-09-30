@@ -1,4 +1,4 @@
-//! Strict DAG-CBOR.
+//! Strict DAG-CBOR, and strict DAG-JSON in [`json`].
 //!
 //! The encoder emits canonical form only. The decoder accepts canonical
 //! form only: definite lengths, minimal integers, sorted unique string
@@ -8,6 +8,7 @@
 
 mod decode;
 mod encode;
+pub mod json;
 mod varint;
 
 use thiserror::Error;
@@ -95,4 +96,26 @@ pub enum CodecError {
     /// The next item is not of the kind the caller asked for.
     #[error("expected a different item type")]
     UnexpectedType,
+
+    /// Text that is not JSON.
+    #[error("invalid JSON")]
+    InvalidJson,
+
+    /// JSON that decodes but is not the canonical DAG-JSON of its value.
+    #[error("not canonical DAG-JSON")]
+    NotCanonical,
+
+    /// A float in DAG-JSON. Implementations write floats differently, so a
+    /// float has no single text form to sign.
+    #[error("floats have no canonical DAG-JSON form")]
+    FloatInText,
+
+    /// A map that uses the `/` key, which DAG-JSON reserves for links and
+    /// bytes.
+    #[error("the `/` key is reserved")]
+    ReservedKey,
+
+    /// Bytes that are not unpadded standard base64.
+    #[error("invalid base64")]
+    InvalidBase64,
 }
