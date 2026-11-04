@@ -426,6 +426,42 @@ fn an_expired_revocation_is_refused_and_null_expiry_is_not() {
     assert!(check(&w.alice.did(), &lasting, &w.to_carol()).is_ok());
 }
 
+/// A revoker who has lost their authority must not be able to take others down
+/// with them.
+#[test]
+fn a_revoker_whose_own_authority_expired_is_refused() {
+    let w = World::new();
+    let lapsed = Delegation::builder(w.bob.did(), Subject::Did(w.alice.did()), read_file())
+        .nonce(Nonce::from_bytes(&[2; 12]))
+        .expires_at(now().minus_seconds(3600))
+        .sign(&w.alice)
+        .unwrap();
+    let chain = [lapsed, w.bob_carol.clone()];
+    let inv = signed_by(&w.bob, w.bob_carol.cid(), &w.alice.did());
+    assert!(matches!(
+        check(&w.alice.did(), &inv, &chain),
+        Err(RevocationError::Invalid(ValidationError::Expired {
+            hop: Hop::Proof(0),
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn a_revoker_whose_own_authority_was_revoked_is_refused() {
+    let w = World::new();
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.revoke(*w.alice_bob.cid());
+    let inv = signed_by(&w.bob, w.bob_carol.cid(), &w.alice.did());
+    assert!(matches!(
+        Validator::new(&MemoryStore::new(), now())
+            .revocations(&revoked)
+            .check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Invalid(ValidationError::Revoked { hop: Hop::Proof(0), cid }))
+            if cid == *w.alice_bob.cid()
+    ));
+}
+
 #[test]
 fn a_delegation_that_lapsed_or_has_not_begun_can_still_be_revoked() {
     let w = World::new();

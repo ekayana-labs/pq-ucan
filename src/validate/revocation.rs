@@ -198,8 +198,9 @@ impl Validator<'_> {
     ///
     /// The validator's resolver, clock, skew and proof limit apply, and its
     /// proof store is where the proofs of a delegated `/ucan/revoke` are
-    /// found. The executor and replay guard do not apply: a revocation is
-    /// idempotent and may arrive by gossip.
+    /// found. A revocation store, if attached, disqualifies a revoker whose
+    /// own authority has been revoked. The executor and replay guard do not
+    /// apply: a revocation is idempotent and may arrive by gossip.
     pub fn check_revocation(
         &self,
         subject: &Did,
@@ -246,6 +247,7 @@ impl Validator<'_> {
                 (source, true)
             }
         };
+        self.check_standing(chain, hop)?;
 
         Ok(AcceptedRevocation {
             target,
@@ -268,6 +270,20 @@ impl Validator<'_> {
             .validate(invocation)
             .map(|_| ())
             .map_err(RevocationError::Grant)
+    }
+
+    /// The right to revoke comes from holding authority, so the hops above
+    /// `hop` must still stand. The hop itself and those below may have lapsed
+    /// or not begun, and revoking them is still meaningful.
+    fn check_standing(&self, chain: &[Delegation], hop: usize) -> Result<(), RevocationError> {
+        let above = chain.get(..hop).unwrap_or_default();
+        for (i, delegation) in above.iter().enumerate() {
+            delegation
+                .check_time(self.now, self.skew)
+                .map_err(|e| RevocationError::Invalid(time_error(Hop::Proof(i), e)))?;
+        }
+        self.check_revocations(above)
+            .map_err(RevocationError::Invalid)
     }
 }
 
