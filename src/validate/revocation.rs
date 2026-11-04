@@ -9,7 +9,9 @@ use ipld_core::{cid::Cid, ipld::Ipld};
 use thiserror::Error;
 
 use super::{check_structure, signature_error, time_error, Hop, ValidationError, Validator};
-use crate::{command::Command, delegation::Delegation, did::Did, invocation::Invocation};
+use crate::{
+    command::Command, delegation::Delegation, did::Did, invocation::Invocation, time::Expiry,
+};
 
 /// The command a revocation invokes.
 pub const REVOKE_COMMAND: &str = "/ucan/revoke";
@@ -146,8 +148,8 @@ fn links_in(values: &[Ipld]) -> Result<Vec<Cid>, RevocationError> {
 pub struct AcceptedRevocation {
     target: Cid,
     revoker: Did,
-    hop: usize,
-    last_hop: usize,
+    authority: Did,
+    target_expiry: Expiry,
     delegated: bool,
 }
 
@@ -164,27 +166,26 @@ impl AcceptedRevocation {
         &self.revoker
     }
 
-    /// The hop whose issuer's right to revoke was used. Root is zero.
+    /// Whose right to revoke was used: the revoker's own, or that of the
+    /// principal who delegated it. The revocation reaches only chains this
+    /// principal issued in. A delegation has no ancestors of its own and
+    /// anyone can sign one to anyone, so a path proves no more than that.
     #[must_use]
-    pub const fn hop(&self) -> usize {
-        self.hop
+    pub const fn authority(&self) -> &Did {
+        &self.authority
+    }
+
+    /// When the revoked delegation expires, after which the record of this
+    /// revocation may be dropped.
+    #[must_use]
+    pub const fn target_expiry(&self) -> Expiry {
+        self.target_expiry
     }
 
     /// Whether that right reached the revoker through `/ucan/revoke`.
     #[must_use]
     pub const fn is_delegated(&self) -> bool {
         self.delegated
-    }
-
-    /// Whether the right rests on an issuer between the root and the target.
-    ///
-    /// A delegation has no ancestors of its own and anyone can sign one to
-    /// anyone, so a principal holding overlapping authority can present a
-    /// path that puts them here. See `docs/validation.md`. A caller that will
-    /// not take that risk can refuse these.
-    #[must_use]
-    pub const fn rests_on_intermediate_issuer(&self) -> bool {
-        self.hop != 0 && self.hop != self.last_hop
     }
 }
 
@@ -221,6 +222,7 @@ impl Validator<'_> {
 
         check_structure(chain, subject, None).map_err(Invalid)?;
         let target = check_names_chain(&revocation, chain)?;
+        let target_expiry = chain.last().map_or(Expiry::Never, Delegation::expiration);
         check_no_issuer_repeats(chain)?;
 
         invocation
@@ -235,8 +237,10 @@ impl Validator<'_> {
         let source = issued_at(invocation.subject()).ok_or_else(|| SubjectNotInChain {
             subject: invocation.subject().clone(),
         })?;
-        let (hop, delegated) = match issued_at(invocation.issuer()) {
-            Some(hop) => (hop, false),
+        let (hop, authority, delegated) = match issued_at(invocation.issuer()) {
+            // The revoker's own right, whatever `sub` names, or anyone in the
+            // chain could name the root and reach every chain.
+            Some(hop) => (hop, invocation.issuer(), false),
             None if invocation.proofs().is_empty() => {
                 return Err(NotAuthorized {
                     revoker: invocation.issuer().clone(),
@@ -244,7 +248,7 @@ impl Validator<'_> {
             }
             None => {
                 self.check_grant(invocation)?;
-                (source, true)
+                (source, invocation.subject(), true)
             }
         };
         self.check_standing(chain, hop)?;
@@ -252,8 +256,8 @@ impl Validator<'_> {
         Ok(AcceptedRevocation {
             target,
             revoker: invocation.issuer().clone(),
-            hop,
-            last_hop: chain.len().saturating_sub(1),
+            authority: authority.clone(),
+            target_expiry,
             delegated,
         })
     }
@@ -282,7 +286,7 @@ impl Validator<'_> {
                 .check_time(self.now, self.skew)
                 .map_err(|e| RevocationError::Invalid(time_error(Hop::Proof(i), e)))?;
         }
-        self.check_revocations(above)
+        self.check_revocations(above, chain)
             .map_err(RevocationError::Invalid)
     }
 }
