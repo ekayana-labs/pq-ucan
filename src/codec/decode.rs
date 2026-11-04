@@ -1,6 +1,6 @@
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
-use ipld_core::{cid::Cid, ipld::Ipld};
+use ipld_core::ipld::Ipld;
 
 use super::{
     encode::{CID_MULTIBASE_IDENTITY, CID_TAG},
@@ -260,8 +260,9 @@ impl<'a> Reader<'a> {
         if *prefix != CID_MULTIBASE_IDENTITY {
             return Err(CodecError::InvalidCid);
         }
-        let cid = Cid::try_from(cid).map_err(|_| CodecError::InvalidCid)?;
-        Ok(Ipld::Link(cid))
+        Ok(Ipld::Link(
+            crate::cid::from_bytes(cid).map_err(|_| CodecError::InvalidCid)?,
+        ))
     }
 }
 
@@ -382,6 +383,17 @@ mod tests {
         let mut wrong = bytes.clone();
         wrong[4] = 0x01;
         assert_eq!(decode(&wrong), Err(CodecError::InvalidCid));
+    }
+
+    #[test]
+    fn a_link_with_bytes_after_the_cid_is_refused() {
+        let cid = crate::cid::of_dag_cbor(b"hello").to_bytes();
+        let mut bytes = vec![0xd8, 0x2a, 0x58, u8::try_from(cid.len() + 2).unwrap(), 0x00];
+        bytes.extend_from_slice(&cid);
+        bytes.push(0xff);
+        // The CID parser stops at the end of the CID, so this has to be asked.
+        assert!(ipld_core::cid::Cid::try_from(&bytes[5..]).is_ok());
+        assert_eq!(decode(&bytes), Err(CodecError::InvalidCid));
     }
 
     #[test]

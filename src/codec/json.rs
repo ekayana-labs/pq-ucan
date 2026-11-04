@@ -9,7 +9,7 @@
 
 use alloc::{collections::BTreeMap, string::String, string::ToString, vec::Vec};
 
-use ipld_core::{cid::Cid, ipld::Ipld};
+use ipld_core::ipld::Ipld;
 
 use super::{CodecError, MAX_DEPTH};
 
@@ -299,7 +299,7 @@ fn reserved(mut map: BTreeMap<String, Ipld>) -> Result<Ipld, CodecError> {
         return Err(CodecError::ReservedKey);
     }
     match inner {
-        Ipld::String(text) => Cid::try_from(text.as_str())
+        Ipld::String(text) => crate::cid::from_text(&text)
             .map(Ipld::Link)
             .map_err(|_| CodecError::InvalidCid),
         Ipld::Map(mut form) => match (form.remove("bytes"), form.is_empty()) {
@@ -464,6 +464,12 @@ mod tests {
         assert_eq!(decode(br#"{"/":1}"#), Err(CodecError::ReservedKey));
         assert_eq!(decode(br#"{"/":"x","a":1}"#), Err(CodecError::ReservedKey));
         assert_eq!(decode(br#"{"/":"not a cid"}"#), Err(CodecError::InvalidCid));
+        // A CID spelled any way but the one the encoder writes.
+        let other = crate::cid::to_base58btc(&crate::cid::of_dag_cbor(b"x"));
+        assert_eq!(
+            decode(format!(r#"{{"/":"{other}"}}"#).as_bytes()),
+            Err(CodecError::InvalidCid)
+        );
         assert_eq!(
             decode(br#"{"/":{"bytes":"!"}}"#),
             Err(CodecError::InvalidBase64)
