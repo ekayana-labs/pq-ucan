@@ -28,6 +28,7 @@ stops at the first failure. Positions are `Hop(n)` for the n-th proof
 
 | # | Check                | Rule                                                                                                   | Failure                          |
 |---|----------------------|--------------------------------------------------------------------------------------------------------|----------------------------------|
+| 0 | Proof limit          | If the validator was given a maximum, `prf` has no more entries than that.                             | `TooManyProofs`                  |
 | 1 | Proofs resolve       | Every CID in `prf` is in the store.                                                                    | `MissingProof(cid)`              |
 | 2 | Non-empty chain      | `prf` has at least one entry. Public resources are the caller's choice, not the default.               | `EmptyChain`                     |
 | 3 | Root authority       | `Hop(0).iss` equals the invocation `sub`.                                                              | `RootNotSubject`                 |
@@ -41,8 +42,9 @@ stops at the first failure. Positions are `Hop(n)` for the n-th proof
 | 11 | Executor            | If the validator was given its own DID: `aud` when present, else `sub`, equals it.                     | `WrongExecutor`                  |
 | 12 | Replay              | If a `ReplayGuard` is attached, the invocation CID has not been seen. Recorded only after 1-11 pass.  | `Replay`                         |
 
-Ordering rationale: structural failures are cheap and give the best
-diagnostics, so they go first; signatures are the expensive step and
+Ordering rationale: the proof limit costs nothing and protects everything
+after it, so it comes before any lookup; structural failures are cheap and
+give the best diagnostics, so they go next; signatures are the expensive step and
 are checked before policy so that no policy is evaluated for a token
 nobody signed; the replay guard is last so that a rejected invocation
 never consumes a nonce.
@@ -128,6 +130,18 @@ character, whitespace included, matches itself. Matching is whole-string.
 `1`, `1.0` and `1.00` are equal. Comparisons between an integer and a
 float are exact. A comparison against a non-number is false, never an
 error.
+
+## Chain length
+
+The specifications set no limit on the length of a chain and no token
+field for one. `Validator::max_proofs` is the executor's own limit: it counts
+the entries in `prf` and applies to every chain alike. It cannot express "Bob
+may delegate twice more", because that would have to travel in the token.
+
+Check 0 runs first because the cost of validating grows with the chain, by
+one signature verification per hop, and an ML-DSA verification takes over a
+millisecond. Without a limit, the invoker decides how much work the executor
+does.
 
 ## Replay
 

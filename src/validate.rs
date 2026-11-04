@@ -142,6 +142,15 @@ pub enum ValidationError {
     #[error("proof {0} is not available")]
     MissingProof(Cid),
 
+    /// The invocation names more proofs than this validator accepts.
+    #[error("invocation carries {count} proofs, the limit is {max}")]
+    TooManyProofs {
+        /// How many it names.
+        count: usize,
+        /// The limit.
+        max: usize,
+    },
+
     /// The root delegation was not issued by the subject.
     #[error("root delegation issued by {issuer}, subject is {subject}")]
     RootNotSubject {
@@ -288,6 +297,7 @@ pub struct Validator<'a> {
     skew: u32,
     executor: Option<&'a Did>,
     replay: Option<&'a mut dyn ReplayGuard>,
+    max_proofs: Option<usize>,
 }
 
 impl<'a> Validator<'a> {
@@ -295,7 +305,8 @@ impl<'a> Validator<'a> {
     pub const DEFAULT_SKEW: u32 = 60;
 
     /// A validator over `store` at time `now`, resolving `did:key` only,
-    /// with the default skew, checking neither executor nor replay.
+    /// with the default skew, checking neither executor nor replay, and with
+    /// no limit on the number of proofs.
     #[must_use]
     pub fn new(store: &'a dyn ProofStore, now: Timestamp) -> Self {
         Validator {
@@ -305,6 +316,7 @@ impl<'a> Validator<'a> {
             skew: Self::DEFAULT_SKEW,
             executor: None,
             replay: None,
+            max_proofs: None,
         }
     }
 
@@ -336,9 +348,28 @@ impl<'a> Validator<'a> {
         self
     }
 
+    /// Refuse invocations that name more than `max` proofs.
+    ///
+    /// UCAN has no depth limit in the token, so this is the executor's own
+    /// policy and it applies to every chain alike.
+    #[must_use]
+    pub const fn max_proofs(mut self, max: usize) -> Self {
+        self.max_proofs = Some(max);
+        self
+    }
+
     /// Run every check. Stops at the first failure.
     pub fn validate(&mut self, invocation: &Invocation) -> Result<Proof, ValidationError> {
         let subject = invocation.subject();
+
+        // 0: before anything is looked up or verified, so that a long chain
+        // costs nothing to refuse.
+        if let Some(max) = self.max_proofs {
+            let count = invocation.proofs().len();
+            if count > max {
+                return Err(ValidationError::TooManyProofs { count, max });
+            }
+        }
 
         // 1, 2: every proof resolves, and there is at least one.
         let chain = invocation

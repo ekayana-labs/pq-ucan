@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `Validator::max_proofs`, an optional limit on the number of proofs an
+  invocation may name. It is checked before any lookup and fails with
+  `ValidationError::TooManyProofs`. There is no limit unless one is set.
+
 ## [0.1.2] - 2026-10-01
 
 ### Added
