@@ -443,51 +443,13 @@ impl<'a> Validator<'a> {
                     .ok_or(ValidationError::MissingProof(*cid))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let root = chain.first().ok_or(ValidationError::EmptyChain)?;
 
-        // 3, 4: the root is issued by the subject and is not a powerline.
-        if !root.issuer().same_principal(subject) {
-            return Err(ValidationError::RootNotSubject {
-                issuer: root.issuer().clone(),
-                subject: subject.clone(),
-            });
-        }
-        if matches!(root.subject(), Subject::Powerline) {
-            return Err(ValidationError::PowerlineAtRoot);
-        }
-
-        // 5: subjects align. A powerline inherits its predecessor's subject,
-        // which by induction is the invocation's.
-        for (i, delegation) in chain.iter().enumerate() {
-            if let Subject::Did(did) = delegation.subject() {
-                if !did.same_principal(subject) {
-                    return Err(ValidationError::SubjectMismatch { hop: Hop::Proof(i) });
-                }
-            }
-        }
-
-        // 6, 7: each hop's audience issues the next token, and each hop's
-        // command covers the next token's.
-        for (i, delegation) in chain.iter().enumerate() {
-            let (next_issuer, next_command) = match chain.get(i + 1) {
-                Some(next) => (next.issuer(), next.command()),
-                None => (invocation.issuer(), invocation.command()),
-            };
-            if !delegation.audience().same_principal(next_issuer) {
-                return Err(ValidationError::PrincipalMismatch {
-                    hop: Hop::Proof(i),
-                    audience: delegation.audience().clone(),
-                    issuer: next_issuer.clone(),
-                });
-            }
-            if !delegation.command().covers(next_command) {
-                return Err(ValidationError::CommandNotCovered {
-                    hop: Hop::Proof(i),
-                    granted: delegation.command().clone(),
-                    requested: next_command.clone(),
-                });
-            }
-        }
+        // 2 to 7.
+        check_structure(
+            &chain,
+            subject,
+            Some((invocation.issuer(), invocation.command())),
+        )?;
 
         // 8: every token is inside its validity window.
         for (i, delegation) in chain.iter().enumerate() {
@@ -500,11 +462,7 @@ impl<'a> Validator<'a> {
             .map_err(|e| time_error(Hop::Invocation, e))?;
 
         // 9: every signature verifies under its issuer's key.
-        for (i, delegation) in chain.iter().enumerate() {
-            delegation
-                .verify(&self.resolver)
-                .map_err(|e| signature_error(Hop::Proof(i), e))?;
-        }
+        self.verify_chain(&chain)?;
         invocation
             .verify(&self.resolver)
             .map_err(|e| signature_error(Hop::Invocation, e))?;
@@ -548,6 +506,15 @@ impl<'a> Validator<'a> {
         })
     }
 
+    fn verify_chain(&self, chain: &[Delegation]) -> Result<(), ValidationError> {
+        for (i, delegation) in chain.iter().enumerate() {
+            delegation
+                .verify(&self.resolver)
+                .map_err(|e| signature_error(Hop::Proof(i), e))?;
+        }
+        Ok(())
+    }
+
     /// Asks about each delegation's own CID rather than the link in `prf`,
     /// which a store may resolve from another CID of the same bytes.
     fn check_revocations(&self, chain: &[Delegation]) -> Result<(), ValidationError> {
@@ -564,6 +531,64 @@ impl<'a> Validator<'a> {
         }
         Ok(())
     }
+}
+
+/// The checks on the shape of a chain, which look at no signature. `last` is
+/// the issuer and command of the token the last hop was given for, if any.
+fn check_structure(
+    chain: &[Delegation],
+    subject: &Did,
+    last: Option<(&Did, &Command)>,
+) -> Result<(), ValidationError> {
+    let root = chain.first().ok_or(ValidationError::EmptyChain)?;
+
+    // 3, 4: the root is issued by the subject and is not a powerline.
+    if !root.issuer().same_principal(subject) {
+        return Err(ValidationError::RootNotSubject {
+            issuer: root.issuer().clone(),
+            subject: subject.clone(),
+        });
+    }
+    if matches!(root.subject(), Subject::Powerline) {
+        return Err(ValidationError::PowerlineAtRoot);
+    }
+
+    // 5: subjects align. A powerline inherits its predecessor's subject,
+    // which by induction is the invocation's.
+    for (i, delegation) in chain.iter().enumerate() {
+        if let Subject::Did(did) = delegation.subject() {
+            if !did.same_principal(subject) {
+                return Err(ValidationError::SubjectMismatch { hop: Hop::Proof(i) });
+            }
+        }
+    }
+
+    // 6, 7: each hop's audience issues the next token, and each hop's
+    // command covers the next token's.
+    for (i, delegation) in chain.iter().enumerate() {
+        let next = chain
+            .get(i + 1)
+            .map(|next| (next.issuer(), next.command()))
+            .or(last);
+        let Some((next_issuer, next_command)) = next else {
+            continue;
+        };
+        if !delegation.audience().same_principal(next_issuer) {
+            return Err(ValidationError::PrincipalMismatch {
+                hop: Hop::Proof(i),
+                audience: delegation.audience().clone(),
+                issuer: next_issuer.clone(),
+            });
+        }
+        if !delegation.command().covers(next_command) {
+            return Err(ValidationError::CommandNotCovered {
+                hop: Hop::Proof(i),
+                granted: delegation.command().clone(),
+                requested: next_command.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn time_error(hop: Hop, error: Error) -> ValidationError {
