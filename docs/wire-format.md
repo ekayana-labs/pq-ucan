@@ -156,7 +156,8 @@ Emitted:
 
 - Definite lengths only.
 - Integers in their shortest encoding; 64-bit range.
-- Floats as 64-bit; NaN and infinities are refused.
+- Floats as 64-bit; NaN, infinities and `-0.0` are refused. `-0.0` is written as
+  `0.0`, since the two are equal and DAG-CBOR allows one encoding.
 - Map keys are strings, sorted by byte length then bytewise.
 - CIDs as tag 42 over bytes with a leading `0x00` identity prefix.
 

@@ -209,7 +209,9 @@ impl<'a> Reader<'a> {
             22 => Ok(Ipld::Null),
             27 => {
                 let value = f64::from_bits(u64::from_be_bytes(self.fixed()?));
-                if value.is_finite() {
+                // -0.0 equals 0.0, so accepting it would give one value two
+                // encodings. DAG-CBOR refuses it for that reason.
+                if value.is_finite() && !(value == 0.0 && value.is_sign_negative()) {
                     Ok(Ipld::Float(value))
                 } else {
                     Err(CodecError::InvalidFloat)
@@ -391,6 +393,20 @@ mod tests {
         assert_eq!(encode(&deep), Err(CodecError::NestingTooDeep));
         let bytes = vec![0x81; (MAX_DEPTH + 2) as usize];
         assert_eq!(decode(&bytes), Err(CodecError::NestingTooDeep));
+    }
+
+    #[test]
+    fn negative_zero_is_refused_and_encodes_as_zero() {
+        const NEGATIVE_ZERO: [u8; 9] = [0xfb, 0x80, 0, 0, 0, 0, 0, 0, 0];
+        const ZERO: [u8; 9] = [0xfb, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(decode(&NEGATIVE_ZERO), Err(CodecError::InvalidFloat));
+        assert!(serde_ipld_dagcbor::from_slice::<Ipld>(&NEGATIVE_ZERO).is_err());
+
+        let value = Ipld::List(vec![Ipld::Float(-0.0)]);
+        let ours = encode(&value).unwrap();
+        assert_eq!(ours, serde_ipld_dagcbor::to_vec(&value).unwrap());
+        assert_eq!(ours.get(1..), Some(ZERO.as_slice()));
+        assert_eq!(decode(&ours).unwrap(), value);
     }
 
     #[test]
