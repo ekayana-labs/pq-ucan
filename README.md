@@ -146,6 +146,29 @@ released `ucan/...@1.0.0` tags; `decode_with(DecodeOptions::STRICT.release_candi
 also accepts the `-rc.1` tags rs-ucan and the JavaScript implementation
 emit.
 
+## Optional checks
+
+The validator checks the chain by default. These are switched on one at a time:
+
+```rust
+let proof = Validator::new(&store, now)
+    .executor(&alice.did())
+    .replay_guard(&mut seen)
+    .revocations(&revoked)
+    .max_proofs(8)
+    .validate(&invocation)?;
+```
+
+`revocations` refuses a chain holding a revoked delegation. The store only
+answers whether a CID is revoked, so you decide which revocations go in it.
+`max_proofs` is your own limit on chain length, since UCAN has no limit in the
+token.
+
+`like` compares text, as the specification requires, so `/data/h1/*` matches
+`/data/h1/../../../etc/passwd`. If an argument is a path, refuse it unless it is
+in normal form before you validate.
+[docs/validation.md](docs/validation.md#paths) has the details.
+
 ## Documents
 
 - [docs/design.md](docs/design.md): the decisions behind the crate and how
