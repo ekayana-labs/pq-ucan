@@ -13,6 +13,7 @@ use pq_ucan::{
     command::Command,
     crypto::{ed25519::Ed25519Keypair, Signer},
     delegation::{Delegation, Subject},
+    did::Did,
     invocation::Invocation,
     nonce::Nonce,
     policy::{Pattern, Policy, Selector, Statement},
@@ -252,7 +253,7 @@ fn a_revoked_chain_is_not_recorded_by_the_guard() {
 struct Counting(Cell<usize>);
 
 impl RevocationStore for Counting {
-    fn is_revoked(&self, _: &Cid) -> bool {
+    fn is_revoked(&self, _: &Cid, _: &[&Did]) -> bool {
         self.0.set(self.0.get() + 1);
         false
     }

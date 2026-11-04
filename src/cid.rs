@@ -1,6 +1,6 @@
 //! CIDs as UCAN uses them: v1, DAG-CBOR, SHA-256, shown as base58btc.
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 
 use ipld_core::cid::{multihash::Multihash, Cid};
 use sha2::{Digest, Sha256};
@@ -33,9 +33,30 @@ pub fn parse(text: &str) -> Result<Cid, CidError> {
     match text.strip_prefix('z') {
         Some(b58) => {
             let raw = bs58::decode(b58).into_vec().map_err(|_| CidError::Base58)?;
-            Cid::try_from(raw.as_slice()).map_err(|_| CidError::Cid)
+            from_bytes(&raw)
         }
-        None => Cid::try_from(text).map_err(|_| CidError::Cid),
+        None => from_text(text),
+    }
+}
+
+/// A CID from exactly these bytes. The parser underneath stops at the end of
+/// the CID and ignores the rest, which would give one CID many encodings.
+pub(crate) fn from_bytes(raw: &[u8]) -> Result<Cid, CidError> {
+    let cid = Cid::try_from(raw).map_err(|_| CidError::Cid)?;
+    if cid.to_bytes() == raw {
+        Ok(cid)
+    } else {
+        Err(CidError::Cid)
+    }
+}
+
+/// A CID whose default text form is exactly this text.
+pub(crate) fn from_text(text: &str) -> Result<Cid, CidError> {
+    let cid = Cid::try_from(text).map_err(|_| CidError::Cid)?;
+    if cid.to_string() == text {
+        Ok(cid)
+    } else {
+        Err(CidError::Cid)
     }
 }
 
@@ -67,5 +88,17 @@ mod tests {
         assert_eq!(parse(&cid.to_string()).unwrap(), cid);
         assert_eq!(parse("zzz"), Err(CidError::Cid));
         assert_eq!(parse("z0"), Err(CidError::Base58));
+    }
+
+    #[test]
+    fn text_with_bytes_after_the_cid_is_refused() {
+        let mut raw = of_dag_cbor(&[0xa0]).to_bytes();
+        raw.push(0xff);
+        let b58 = alloc::format!("z{}", bs58::encode(&raw).into_string());
+        assert!(Cid::try_from(raw.as_slice()).is_ok());
+        assert_eq!(parse(&b58), Err(CidError::Cid));
+
+        let cid = of_dag_cbor(&[0xa0]);
+        assert_eq!(parse(&cid.to_string().to_uppercase()), Err(CidError::Cid));
     }
 }

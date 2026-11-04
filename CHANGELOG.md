@@ -13,16 +13,33 @@ adheres to [Semantic Versioning](https://semver.org/).
   `ValidationError::TooManyProofs`. There is no limit unless one is set.
 - `Validator::revocations`, an optional check of every delegation in a chain
   against a `RevocationStore`, failing with `ValidationError::Revoked`.
-  `MemoryRevocationStore` keeps them in memory. Nothing is checked unless a
-  store is attached.
+  `MemoryRevocationStore` keeps them in memory, and `prune_expired` drops those
+  whose target has expired. Nothing is checked unless a store is attached.
 - `Validator::check_revocation`, which reads a `/ucan/revoke` invocation and
   accepts it only if it is signed and its issuer may revoke the delegation it
   names, given that delegation's chain: the delegation's issuer, an issuer above
   it, or a holder of a delegated `/ucan/revoke`. A refusal is a named
-  `RevocationError`. Other implementations have no `/ucan/revoke` yet, so this
-  has no fixture, and the Revocation specification is a release candidate that
-  still uses older names. `docs/validation.md` lists how each one was read, and
-  one case the check reports but cannot refuse.
+  `RevocationError`. A recorded revocation reaches only chains its authority
+  issued in, because a path shows no more than that. Other implementations have
+  no `/ucan/revoke` yet, so this has no fixture, and the Revocation specification
+  is a release candidate that still uses older names. `docs/validation.md` lists
+  how each one was read.
+- Fuzz targets in `fuzz/` for both codecs, tokens, policies and the small
+  parsers. The codecs are checked against `serde_ipld_dagcbor` and
+  `serde_ipld_dagjson`. They are not part of the published crate.
+
+### Fixed
+
+- The DAG-CBOR decoder accepted `-0.0` and the encoder wrote it, which the
+  DAG-CBOR specification forbids, since it gives one value two encodings. It is
+  now refused on decode and written as `0.0`, as `serde_ipld_dagcbor` does. A
+  token holding `-0.0` that decoded under 0.1.2 no longer decodes. Found by
+  fuzzing.
+- A link with bytes after its CID decoded as if they were not there, so one
+  token could have many encodings. Links in DAG-CBOR, links in DAG-JSON and
+  `cid::parse` now refuse them, and a DAG-JSON link must spell its CID the way
+  the encoder does. Only the signer can produce such a token, since the bytes
+  are signed. Found by fuzzing.
 
 ### Documentation
 

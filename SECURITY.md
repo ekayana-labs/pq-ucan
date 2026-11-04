@@ -27,6 +27,8 @@ Concretely:
 - a signature that verifies under the wrong algorithm or the wrong key;
 - a replay that a `ReplayGuard` fails to catch;
 - a revoked delegation that passes a validator with a `RevocationStore`;
+- a revocation that `Validator::check_revocation` accepts from someone it
+  should refuse, or one that reaches a chain its authority did not issue in;
 - a panic on untrusted input. Tokens, DIDs, policies and arguments all
   arrive from the network.
 

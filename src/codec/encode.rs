@@ -82,8 +82,9 @@ fn item(value: &Ipld, out: &mut Vec<u8>, depth: u32) -> Result<(), CodecError> {
             if !f.is_finite() {
                 return Err(CodecError::InvalidFloat);
             }
+            let value = if *f == 0.0 { 0.0 } else { *f };
             out.push(FLOAT64);
-            out.extend_from_slice(&f.to_bits().to_be_bytes());
+            out.extend_from_slice(&value.to_bits().to_be_bytes());
         }
         Ipld::String(s) => text(s, out),
         Ipld::Bytes(b) => bytes(b, out),

@@ -15,17 +15,17 @@ DAG-JSON presentation of tokens.
   specification.
 - Reading and checking `/ucan/revoke` invocations per the UCAN Revocation
   specification, to fill the `RevocationStore`: done in
-  `Validator::check_revocation`. Still open: a store that scopes a revocation to
-  chains containing the revoker, once the specification settles on that, and a
-  fixture from another implementation once one exists.
+  `Validator::check_revocation`. Still open: a fixture from another
+  implementation once one exists.
 - A `did:web` resolver behind a `resolve-web` feature.
 - A pure-Rust ML-DSA backend (RustCrypto `ml-dsa`) so post-quantum
   principals work on `wasm32` and in `no_std`.
 
 ## Assurance
 
-- Differential fuzzing of both codecs against `serde_ipld_dagcbor` and
-  `serde_ipld_dagjson`. Fixed samples are checked against both today.
+- Run the fuzz targets in `fuzz/` on a schedule. They run by hand today, and
+  cover both codecs differentially against `serde_ipld_dagcbor` and
+  `serde_ipld_dagjson`, plus tokens, policies and the small parsers.
 - Cross-implementation vectors generated with the working group's
   JavaScript implementation, checked in as fixtures.
 - Benchmarks for decode, verify and validate on the reference chain.

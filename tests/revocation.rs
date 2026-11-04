@@ -8,6 +8,8 @@
     clippy::panic
 )]
 
+use core::cell::RefCell;
+
 use pq_ucan::{
     command::Command,
     crypto::{ed25519::Ed25519Keypair, Algorithm, PublicKey, Signer},
@@ -19,7 +21,7 @@ use pq_ucan::{
     time::Timestamp,
     validate::{
         AcceptedRevocation, Hop, MemoryReplayGuard, MemoryRevocationStore, MemoryStore, Revocation,
-        RevocationError, ValidationError, Validator, REVOKE_COMMAND,
+        RevocationError, RevocationStore, ValidationError, Validator, REVOKE_COMMAND,
     },
     Cid, Ipld,
 };
@@ -105,6 +107,31 @@ fn signed_by(signer: &Ed25519Keypair, target: &Cid, subject: &Did) -> Invocation
     revoking(target, subject).sign(signer).unwrap()
 }
 
+/// Carol's or Dan's use of a chain, under a store of revocations.
+fn using(
+    w: &World,
+    chain: &[Delegation],
+    revoked: &MemoryRevocationStore,
+) -> Result<pq_ucan::validate::Proof, ValidationError> {
+    let mut store = MemoryStore::new();
+    for link in chain {
+        store.insert(link.clone());
+    }
+    let holder = [&w.bob, &w.carol, &w.dan]
+        .into_iter()
+        .find(|key| chain.last().unwrap().audience().same_principal(&key.did()))
+        .unwrap();
+    let invocation = Invocation::builder(w.alice.did(), read_file())
+        .proofs(chain.iter().map(|link| *link.cid()))
+        .nonce(Nonce::from_bytes(&[7; 12]))
+        .expires_at(now().plus_seconds(60))
+        .sign(holder)
+        .unwrap();
+    Validator::new(&store, now())
+        .revocations(revoked)
+        .validate(&invocation)
+}
+
 fn check(
     subject: &Did,
     invocation: &Invocation,
@@ -129,9 +156,9 @@ fn the_issuer_of_the_delegation_may_revoke_it() {
     let accepted = check(&w.alice.did(), &inv, &w.to_carol()).unwrap();
     assert_eq!(accepted.target(), w.bob_carol.cid());
     assert_eq!(accepted.revoker(), &w.bob.did());
-    assert_eq!(accepted.hop(), 1);
+    assert_eq!(accepted.authority(), &w.bob.did());
     assert!(!accepted.is_delegated());
-    assert!(!accepted.rests_on_intermediate_issuer());
+    assert_eq!(accepted.target_expiry(), w.bob_carol.expiration());
 }
 
 #[test]
@@ -144,8 +171,7 @@ fn the_root_may_revoke_anything_below_it() {
     ];
     let inv = signed_by(&w.alice, w.carol_dan.cid(), &w.alice.did());
     let accepted = check(&w.alice.did(), &inv, &chain).unwrap();
-    assert_eq!(accepted.hop(), 0);
-    assert!(!accepted.rests_on_intermediate_issuer());
+    assert_eq!(accepted.authority(), &w.alice.did());
 }
 
 #[test]
@@ -158,8 +184,7 @@ fn an_issuer_above_the_delegation_may_revoke_it() {
     ];
     let inv = signed_by(&w.bob, w.carol_dan.cid(), &w.alice.did());
     let accepted = check(&w.alice.did(), &inv, &chain).unwrap();
-    assert_eq!(accepted.hop(), 1);
-    assert!(accepted.rests_on_intermediate_issuer());
+    assert_eq!(accepted.authority(), &w.bob.did());
 }
 
 #[test]
@@ -349,19 +374,215 @@ fn a_chain_whose_commands_do_not_line_up_is_refused() {
     ));
 }
 
-/// What the check cannot see. Mallory really holds this command from Alice, and
-/// signing to Bob needs nobody's consent, so her path looks like any other. It
-/// is reported, and a careful caller can refuse it. See `docs/validation.md`.
+/// Mallory really holds this command from Alice, and signing to Bob needs
+/// nobody's consent, so her path is good and the check accepts it. It gives her
+/// nothing outside chains she is in, even though she names Alice as `sub`.
 #[test]
-fn overlapping_authority_can_present_a_path_and_is_reported() {
+fn a_manufactured_path_reaches_only_chains_the_revoker_is_in() {
     let w = World::new();
     let alice_mallory = delegate(&w.alice, &w.mallory, &w.alice, read_file());
     let mallory_bob = delegate(&w.mallory, &w.bob, &w.alice, read_file());
-    let chain = [alice_mallory, mallory_bob, w.bob_carol.clone()];
+    let through_mallory = [alice_mallory, mallory_bob, w.bob_carol.clone()];
     let inv = signed_by(&w.mallory, w.bob_carol.cid(), &w.alice.did());
-    let accepted = check(&w.alice.did(), &inv, &chain).unwrap();
-    assert_eq!(accepted.hop(), 1);
-    assert!(accepted.rests_on_intermediate_issuer());
+    let accepted = check(&w.alice.did(), &inv, &through_mallory).unwrap();
+    assert_eq!(accepted.authority(), &w.mallory.did());
+
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&accepted);
+
+    assert!(using(&w, &w.to_carol(), &revoked).is_ok());
+    assert!(matches!(
+        using(&w, &through_mallory, &revoked),
+        Err(ValidationError::Revoked { hop: Hop::Proof(2), cid }) if cid == *w.bob_carol.cid()
+    ));
+}
+
+/// Bob's revocation of Carol's delegation to Dan does not touch Dan's authority
+/// by another route that Bob is not on. The specification's two film tickets.
+#[test]
+fn a_chain_around_an_intermediate_revoker_survives() {
+    let w = World::new();
+    let chain = [
+        w.alice_bob.clone(),
+        w.bob_carol.clone(),
+        w.carol_dan.clone(),
+    ];
+    let inv = signed_by(&w.bob, w.carol_dan.cid(), &w.alice.did());
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &inv, &chain).unwrap());
+
+    assert!(matches!(
+        using(&w, &chain, &revoked),
+        Err(ValidationError::Revoked {
+            hop: Hop::Proof(2),
+            ..
+        })
+    ));
+    let around_bob = [
+        delegate(&w.alice, &w.carol, &w.alice, read_file()),
+        w.carol_dan.clone(),
+    ];
+    assert!(using(&w, &around_bob, &revoked).is_ok());
+}
+
+#[test]
+fn the_root_reaches_every_chain() {
+    let w = World::new();
+    let chain = [w.alice_bob.clone(), w.bob_carol.clone()];
+    let inv = signed_by(&w.alice, w.bob_carol.cid(), &w.alice.did());
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &inv, &chain).unwrap());
+
+    assert!(using(&w, &chain, &revoked).is_err());
+    let alice_mallory = delegate(&w.alice, &w.mallory, &w.alice, read_file());
+    let mallory_bob = delegate(&w.mallory, &w.bob, &w.alice, read_file());
+    assert!(using(
+        &w,
+        &[alice_mallory, mallory_bob, w.bob_carol.clone()],
+        &revoked
+    )
+    .is_err());
+}
+
+#[test]
+fn a_revocation_by_the_target_issuer_reaches_every_chain_holding_the_target() {
+    let w = World::new();
+    let chain = [w.alice_bob.clone(), w.bob_carol.clone()];
+    let inv = signed_by(&w.bob, w.bob_carol.cid(), &w.alice.did());
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &inv, &chain).unwrap());
+
+    assert!(using(&w, &chain, &revoked).is_err());
+    let alice_mallory = delegate(&w.alice, &w.mallory, &w.alice, read_file());
+    let mallory_bob = delegate(&w.mallory, &w.bob, &w.alice, read_file());
+    assert!(using(
+        &w,
+        &[alice_mallory, mallory_bob, w.bob_carol.clone()],
+        &revoked
+    )
+    .is_err());
+}
+
+#[test]
+fn revoke_reaches_every_chain() {
+    let w = World::new();
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.revoke(*w.bob_carol.cid());
+    assert!(!revoked.is_revoked(w.alice_bob.cid(), &[]));
+    assert!(revoked.is_revoked(w.bob_carol.cid(), &[]));
+}
+
+#[test]
+fn a_store_compares_principals_not_strings() {
+    let w = World::new();
+    let inv = signed_by(&w.bob, w.bob_carol.cid(), &w.alice.did());
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &inv, &w.to_carol()).unwrap());
+
+    let with_fragment = Did::parse(&format!("{}#key-1", w.bob.did().as_str())).unwrap();
+    assert!(revoked.is_revoked(w.bob_carol.cid(), &[&with_fragment]));
+    assert!(!revoked.is_revoked(w.bob_carol.cid(), &[&w.mallory.did()]));
+}
+
+#[test]
+fn two_revokers_each_reach_their_own_chains() {
+    let w = World::new();
+    let alice_mallory = delegate(&w.alice, &w.mallory, &w.alice, read_file());
+    let mallory_bob = delegate(&w.mallory, &w.bob, &w.alice, read_file());
+    let through_mallory = [alice_mallory, mallory_bob, w.bob_carol.clone()];
+    let by_mallory = signed_by(&w.mallory, w.bob_carol.cid(), &w.alice.did());
+    let by_alice = signed_by(&w.alice, w.bob_carol.cid(), &w.alice.did());
+
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &by_mallory, &through_mallory).unwrap());
+    assert!(using(&w, &w.to_carol(), &revoked).is_ok());
+    revoked.record(&check(&w.alice.did(), &by_alice, &w.to_carol()).unwrap());
+    assert!(using(&w, &w.to_carol(), &revoked).is_err());
+
+    // A later revoker does not displace an earlier one.
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &by_alice, &w.to_carol()).unwrap());
+    revoked.record(&check(&w.alice.did(), &by_mallory, &through_mallory).unwrap());
+    assert!(using(&w, &w.to_carol(), &revoked).is_err());
+}
+
+#[test]
+fn pruning_forgets_only_what_has_expired() {
+    let w = World::new();
+    let chain = w.to_carol();
+    let inv = signed_by(&w.bob, w.bob_carol.cid(), &w.alice.did());
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &inv, &chain).unwrap());
+    revoked.revoke(*w.carol_dan.cid());
+    let bob = w.bob.did();
+
+    revoked.prune_expired(now().plus_seconds(3600), 60);
+    assert!(revoked.is_revoked(w.bob_carol.cid(), &[&bob]));
+
+    revoked.prune_expired(now().plus_seconds(3661), 60);
+    assert!(!revoked.is_revoked(w.bob_carol.cid(), &[&bob]));
+    assert!(revoked.is_revoked(w.carol_dan.cid(), &[]));
+}
+
+#[test]
+fn pruning_keeps_what_the_caller_revoked_even_if_also_recorded() {
+    let w = World::new();
+    let inv = signed_by(&w.bob, w.bob_carol.cid(), &w.alice.did());
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(&check(&w.alice.did(), &inv, &w.to_carol()).unwrap());
+    revoked.revoke(*w.bob_carol.cid());
+    revoked.prune_expired(now().plus_seconds(7200), 0);
+    assert!(revoked.is_revoked(w.bob_carol.cid(), &[]));
+}
+
+#[test]
+fn a_delegation_that_never_expires_is_not_pruned() {
+    let w = World::new();
+    let lasting = Delegation::builder(w.carol.did(), Subject::Did(w.alice.did()), read_file())
+        .nonce(Nonce::from_bytes(&[7; 12]))
+        .never_expires()
+        .sign(&w.bob)
+        .unwrap();
+    let inv = signed_by(&w.bob, lasting.cid(), &w.alice.did());
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.record(
+        &check(
+            &w.alice.did(),
+            &inv,
+            &[w.alice_bob.clone(), lasting.clone()],
+        )
+        .unwrap(),
+    );
+    revoked.prune_expired(now().plus_seconds(u32::MAX), 0);
+    assert!(revoked.is_revoked(lasting.cid(), &[&w.bob.did()]));
+}
+
+/// Asks what a store was told, to show it hears the whole chain.
+#[derive(Default)]
+struct Listening(RefCell<Vec<usize>>);
+
+impl RevocationStore for Listening {
+    fn is_revoked(&self, _: &Cid, issuers: &[&Did]) -> bool {
+        self.0.borrow_mut().push(issuers.len());
+        false
+    }
+}
+
+#[test]
+fn a_store_hears_every_issuer_of_the_chain() {
+    let w = World::new();
+    let chain = [
+        w.alice_bob.clone(),
+        w.bob_carol.clone(),
+        w.carol_dan.clone(),
+    ];
+    let listening = Listening::default();
+    let inv = signed_by(&w.carol, w.carol_dan.cid(), &w.alice.did());
+    assert!(Validator::new(&MemoryStore::new(), now())
+        .revocations(&listening)
+        .check_revocation(&w.alice.did(), &inv, &chain)
+        .is_ok());
+    assert_eq!(*listening.0.borrow(), [3, 3]);
 }
 
 #[test]
@@ -661,9 +882,8 @@ fn a_holder_of_delegated_revoke_may_revoke_what_it_names() {
         .check_revocation(&w.alice.did(), &inv, &w.to_carol())
         .unwrap();
     assert!(accepted.is_delegated());
-    assert_eq!(accepted.hop(), 0);
+    assert_eq!(accepted.authority(), &w.alice.did());
     assert_eq!(accepted.revoker(), &w.zelda.did());
-    assert!(!accepted.rests_on_intermediate_issuer());
 }
 
 #[test]
@@ -700,7 +920,7 @@ fn an_intermediate_issuer_may_hand_on_its_own_right() {
         .check_revocation(&w.alice.did(), &inv, &w.to_carol())
         .unwrap();
     assert!(accepted.is_delegated());
-    assert_eq!(accepted.hop(), 1);
+    assert_eq!(accepted.authority(), &w.bob.did());
 }
 
 /// With the subject check gone this is the attack: Mallory roots a perfectly
@@ -998,7 +1218,7 @@ fn an_accepted_revocation_fills_the_store_and_cuts_off_the_chain() {
     let accepted = Validator::new(&proofs, now())
         .check_revocation(&w.alice.did(), &revocation, &w.to_carol())
         .unwrap();
-    revoked.revoke(*accepted.target());
+    revoked.record(&accepted);
 
     assert!(matches!(
         Validator::new(&proofs, now()).revocations(&revoked).validate(&use_it),

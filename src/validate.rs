@@ -3,10 +3,7 @@
 //! The pipeline, its order and its failures are specified in
 //! `docs/validation.md`. Everything here is that document, in code.
 
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    vec::Vec,
-};
+use alloc::{collections::BTreeMap, vec::Vec};
 use core::fmt;
 
 use ipld_core::{cid::Cid, ipld::Ipld};
@@ -125,10 +122,21 @@ impl ReplayGuard for MemoryReplayGuard {
 /// takes the caller's word for what goes in it, so run a signed revocation
 /// through [`Validator::check_revocation`] first. See `docs/validation.md`.
 pub trait RevocationStore {
-    /// Whether the delegation with this CID has been revoked. A store that
-    /// cannot tell should answer `true`, so that an outage refuses requests
-    /// rather than letting a revoked chain through.
-    fn is_revoked(&self, cid: &Cid) -> bool;
+    /// Whether the delegation with this CID is revoked for a chain with these
+    /// issuers, which is every issuer in the chain, root first.
+    ///
+    /// A revocation by a principal reaches only chains that principal issued
+    /// in, so compare with [`Did::same_principal`]. A store that cannot tell
+    /// should answer `true`, so that an outage refuses requests rather than
+    /// letting a revoked chain through.
+    fn is_revoked(&self, cid: &Cid, issuers: &[&Did]) -> bool;
+}
+
+#[derive(Debug, Clone, Default)]
+struct Recorded {
+    everywhere: bool,
+    by: Vec<Did>,
+    target_expiry: Option<Expiry>,
 }
 
 /// Revocations held in memory.
@@ -137,7 +145,7 @@ pub trait RevocationStore {
 /// irreversible, and a mistake is fixed by issuing a new delegation.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryRevocationStore {
-    revoked: BTreeSet<Cid>,
+    revoked: BTreeMap<Cid, Recorded>,
 }
 
 impl MemoryRevocationStore {
@@ -147,16 +155,50 @@ impl MemoryRevocationStore {
         Self::default()
     }
 
-    /// Record that the delegation with this CID is revoked. It need not have
-    /// been seen yet, since a revocation can arrive first.
+    /// Record a revocation that passed [`Validator::check_revocation`]. It
+    /// reaches the chains its authority issued in.
+    pub fn record(&mut self, accepted: &AcceptedRevocation) {
+        let entry = self.revoked.entry(*accepted.target()).or_default();
+        entry.target_expiry = Some(accepted.target_expiry());
+        if !entry
+            .by
+            .iter()
+            .any(|did| did.same_principal(accepted.authority()))
+        {
+            entry.by.push(accepted.authority().clone());
+        }
+    }
+
+    /// Revoke the delegation with this CID in every chain, on the caller's
+    /// own judgement. It need not have been seen yet, since a revocation can
+    /// arrive first.
     pub fn revoke(&mut self, cid: Cid) {
-        self.revoked.insert(cid);
+        self.revoked.entry(cid).or_default().everywhere = true;
+    }
+
+    /// Forget revocations of delegations that expired before `now`, less
+    /// `skew`, since those fail on their time bounds anyway. What
+    /// [`revoke`](Self::revoke) recorded is kept, because its expiry is not
+    /// known.
+    pub fn prune_expired(&mut self, now: Timestamp, skew: u32) {
+        self.revoked.retain(|_, recorded| {
+            recorded.everywhere
+                || !recorded
+                    .target_expiry
+                    .is_some_and(|expiry| expiry.is_past(now, skew))
+        });
     }
 }
 
 impl RevocationStore for MemoryRevocationStore {
-    fn is_revoked(&self, cid: &Cid) -> bool {
-        self.revoked.contains(cid)
+    fn is_revoked(&self, cid: &Cid, issuers: &[&Did]) -> bool {
+        self.revoked.get(cid).is_some_and(|recorded| {
+            recorded.everywhere
+                || recorded
+                    .by
+                    .iter()
+                    .any(|did| issuers.iter().any(|issuer| issuer.same_principal(did)))
+        })
     }
 }
 
@@ -472,7 +514,7 @@ impl<'a> Validator<'a> {
             .map_err(|e| signature_error(Hop::Invocation, e))?;
 
         // 9a: no delegation in the chain has been revoked.
-        self.check_revocations(&chain)?;
+        self.check_revocations(&chain, &chain)?;
 
         // 10: the arguments satisfy every policy in the chain.
         let args = Ipld::Map(invocation.args().clone());
@@ -519,14 +561,20 @@ impl<'a> Validator<'a> {
         Ok(())
     }
 
-    /// Asks about each delegation's own CID rather than the link in `prf`,
-    /// which a store may resolve from another CID of the same bytes.
-    fn check_revocations(&self, chain: &[Delegation]) -> Result<(), ValidationError> {
+    /// Asks about `hops`, the start of `chain`, using each delegation's own CID
+    /// rather than the link in `prf`, which a store may resolve from another
+    /// CID of the same bytes.
+    fn check_revocations(
+        &self,
+        hops: &[Delegation],
+        chain: &[Delegation],
+    ) -> Result<(), ValidationError> {
         let Some(revocations) = self.revocations else {
             return Ok(());
         };
-        for (i, delegation) in chain.iter().enumerate() {
-            if revocations.is_revoked(delegation.cid()) {
+        let issuers: Vec<&Did> = chain.iter().map(Delegation::issuer).collect();
+        for (i, delegation) in hops.iter().enumerate() {
+            if revocations.is_revoked(delegation.cid(), &issuers) {
                 return Err(ValidationError::Revoked {
                     hop: Hop::Proof(i),
                     cid: *delegation.cid(),

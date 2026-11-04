@@ -9,7 +9,7 @@ repository = "https://github.com/ekayana-labs/pq-ucan"
 readme = "README.md"
 keywords = ["ucan", "capabilities", "post-quantum", "ml-dsa", "did"]
 categories = ["cryptography", "authentication", "no-std"]
-exclude = [".github/"]
+exclude = [".github/", "fuzz/"]
 
 [dependencies]
 bs58 = { version = "0.5", default-features = false, features = ["alloc"] }

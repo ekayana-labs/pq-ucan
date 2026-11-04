@@ -2,7 +2,7 @@
 //!
 //! The encoder emits canonical form only. The decoder accepts canonical
 //! form only: definite lengths, minimal integers, sorted unique string
-//! keys, finite 64-bit floats, tag 42 for links, nothing left over. Two
+//! keys, finite 64-bit floats without -0.0, tag 42 for links, nothing left over. Two
 //! byte strings never decode to the same value, which is what makes
 //! signing the bytes safe.
 
@@ -45,7 +45,7 @@ pub enum CodecError {
     #[error("integer out of range")]
     IntegerOutOfRange,
 
-    /// A float that is not a finite 64-bit value.
+    /// A float that is not a finite 64-bit value, or is negative zero.
     #[error("invalid float")]
     InvalidFloat,
 

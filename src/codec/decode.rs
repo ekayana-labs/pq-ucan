@@ -1,6 +1,6 @@
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
-use ipld_core::{cid::Cid, ipld::Ipld};
+use ipld_core::ipld::Ipld;
 
 use super::{
     encode::{CID_MULTIBASE_IDENTITY, CID_TAG},
@@ -209,7 +209,9 @@ impl<'a> Reader<'a> {
             22 => Ok(Ipld::Null),
             27 => {
                 let value = f64::from_bits(u64::from_be_bytes(self.fixed()?));
-                if value.is_finite() {
+                // -0.0 equals 0.0, so accepting it would give one value two
+                // encodings. DAG-CBOR refuses it for that reason.
+                if value.is_finite() && !(value == 0.0 && value.is_sign_negative()) {
                     Ok(Ipld::Float(value))
                 } else {
                     Err(CodecError::InvalidFloat)
@@ -258,8 +260,9 @@ impl<'a> Reader<'a> {
         if *prefix != CID_MULTIBASE_IDENTITY {
             return Err(CodecError::InvalidCid);
         }
-        let cid = Cid::try_from(cid).map_err(|_| CodecError::InvalidCid)?;
-        Ok(Ipld::Link(cid))
+        Ok(Ipld::Link(
+            crate::cid::from_bytes(cid).map_err(|_| CodecError::InvalidCid)?,
+        ))
     }
 }
 
@@ -383,6 +386,17 @@ mod tests {
     }
 
     #[test]
+    fn a_link_with_bytes_after_the_cid_is_refused() {
+        let cid = crate::cid::of_dag_cbor(b"hello").to_bytes();
+        let mut bytes = vec![0xd8, 0x2a, 0x58, u8::try_from(cid.len() + 2).unwrap(), 0x00];
+        bytes.extend_from_slice(&cid);
+        bytes.push(0xff);
+        // The CID parser stops at the end of the CID, so this has to be asked.
+        assert!(ipld_core::cid::Cid::try_from(&bytes[5..]).is_ok());
+        assert_eq!(decode(&bytes), Err(CodecError::InvalidCid));
+    }
+
+    #[test]
     fn nesting_is_bounded() {
         let mut deep = Ipld::Null;
         for _ in 0..(MAX_DEPTH + 2) {
@@ -391,6 +405,20 @@ mod tests {
         assert_eq!(encode(&deep), Err(CodecError::NestingTooDeep));
         let bytes = vec![0x81; (MAX_DEPTH + 2) as usize];
         assert_eq!(decode(&bytes), Err(CodecError::NestingTooDeep));
+    }
+
+    #[test]
+    fn negative_zero_is_refused_and_encodes_as_zero() {
+        const NEGATIVE_ZERO: [u8; 9] = [0xfb, 0x80, 0, 0, 0, 0, 0, 0, 0];
+        const ZERO: [u8; 9] = [0xfb, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(decode(&NEGATIVE_ZERO), Err(CodecError::InvalidFloat));
+        assert!(serde_ipld_dagcbor::from_slice::<Ipld>(&NEGATIVE_ZERO).is_err());
+
+        let value = Ipld::List(vec![Ipld::Float(-0.0)]);
+        let ours = encode(&value).unwrap();
+        assert_eq!(ours, serde_ipld_dagcbor::to_vec(&value).unwrap());
+        assert_eq!(ours.get(1..), Some(ZERO.as_slice()));
+        assert_eq!(decode(&ours).unwrap(), value);
     }
 
     #[test]
