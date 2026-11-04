@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1290" width="960" height="1290" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1308" width="960" height="1308" role="img" aria-labelledby="t d">
 <title id="t">How pq-ucan works</title>
-<desc id="d">A delegation chain from Alice to Bob to Carol, the byte layout of a token, the supported signature algorithms and signing paths, and the twelve checks the validator runs on an invocation.</desc>
+<desc id="d">A delegation chain from Alice to Bob to Carol, the byte layout of a token, the supported signature algorithms and signing paths, the twelve checks the validator runs on an invocation, and the two it adds on request.</desc>
 <style>
 svg {
   --bg: #ffffff; --panel: #f6f8fa; --head: #eaeef2; --line: #d0d7de;
@@ -45,7 +45,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
   <marker id="m-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="muted"/></marker>
 </defs>
 
-<rect class="bg" x="0" y="0" width="960" height="1290" rx="12"/>
+<rect class="bg" x="0" y="0" width="960" height="1308" rx="12"/>
 
 <text class="h1" x="30" y="46">pq-ucan: how a UCAN chain carries authority</text>
 <text class="muted" x="30" y="72" style="font-size:13.5px">Delegations hand a capability down a chain of did:key principals. An invocation exercises it. The executor validates the whole chain before acting.</text>
@@ -316,4 +316,5 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 
 <text class="sm muted" x="30" y="1250">Order: cheap structural checks first for the best diagnostics. Signatures before policy, so no policy runs on a token nobody signed.</text>
 <text class="sm muted" x="30" y="1268">Replay last, so a rejected invocation never consumes a nonce. Time bounds allow a clock skew, 60 seconds by default.</text>
+<text class="sm muted" x="30" y="1286">On request: a limit on proofs before 01 (TooManyProofs), and a revocation check after 09 (Revoked).</text>
 </svg>

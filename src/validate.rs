@@ -3,7 +3,10 @@
 //! The pipeline, its order and its failures are specified in
 //! `docs/validation.md`. Everything here is that document, in code.
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 use core::fmt;
 
 use ipld_core::{cid::Cid, ipld::Ipld};
@@ -17,6 +20,10 @@ use crate::{
     time::{Expiry, Timestamp},
     Error,
 };
+
+mod revocation;
+
+pub use revocation::{AcceptedRevocation, Revocation, RevocationError, REVOKE_COMMAND};
 
 /// Where a validator finds the delegations an invocation names.
 pub trait ProofStore {
@@ -112,6 +119,47 @@ impl ReplayGuard for MemoryReplayGuard {
     }
 }
 
+/// Says whether a delegation has been revoked.
+///
+/// The validator asks about the CID of each delegation in a chain. The store
+/// takes the caller's word for what goes in it, so run a signed revocation
+/// through [`Validator::check_revocation`] first. See `docs/validation.md`.
+pub trait RevocationStore {
+    /// Whether the delegation with this CID has been revoked. A store that
+    /// cannot tell should answer `true`, so that an outage refuses requests
+    /// rather than letting a revoked chain through.
+    fn is_revoked(&self, cid: &Cid) -> bool;
+}
+
+/// Revocations held in memory.
+///
+/// There is no way to take one back: the specification makes a revocation
+/// irreversible, and a mistake is fixed by issuing a new delegation.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryRevocationStore {
+    revoked: BTreeSet<Cid>,
+}
+
+impl MemoryRevocationStore {
+    /// An empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that the delegation with this CID is revoked. It need not have
+    /// been seen yet, since a revocation can arrive first.
+    pub fn revoke(&mut self, cid: Cid) {
+        self.revoked.insert(cid);
+    }
+}
+
+impl RevocationStore for MemoryRevocationStore {
+    fn is_revoked(&self, cid: &Cid) -> bool {
+        self.revoked.contains(cid)
+    }
+}
+
 /// A position in the chain that a failure points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Hop {
@@ -141,6 +189,15 @@ pub enum ValidationError {
     /// A named proof is not in the store.
     #[error("proof {0} is not available")]
     MissingProof(Cid),
+
+    /// The invocation names more proofs than this validator accepts.
+    #[error("invocation carries {count} proofs, the limit is {max}")]
+    TooManyProofs {
+        /// How many it names.
+        count: usize,
+        /// The limit.
+        max: usize,
+    },
 
     /// The root delegation was not issued by the subject.
     #[error("root delegation issued by {issuer}, subject is {subject}")]
@@ -218,6 +275,15 @@ pub enum ValidationError {
         hop: Hop,
     },
 
+    /// A delegation in the chain has been revoked.
+    #[error("{hop}: delegation {cid} has been revoked")]
+    Revoked {
+        /// Where.
+        hop: Hop,
+        /// The revoked delegation.
+        cid: Cid,
+    },
+
     /// The arguments fail a delegation's policy.
     #[error("{hop}: policy statement {statement} rejected the arguments")]
     PolicyRejected {
@@ -288,6 +354,8 @@ pub struct Validator<'a> {
     skew: u32,
     executor: Option<&'a Did>,
     replay: Option<&'a mut dyn ReplayGuard>,
+    max_proofs: Option<usize>,
+    revocations: Option<&'a dyn RevocationStore>,
 }
 
 impl<'a> Validator<'a> {
@@ -295,7 +363,8 @@ impl<'a> Validator<'a> {
     pub const DEFAULT_SKEW: u32 = 60;
 
     /// A validator over `store` at time `now`, resolving `did:key` only,
-    /// with the default skew, checking neither executor nor replay.
+    /// with the default skew, checking neither executor, replay nor
+    /// revocation, and with no limit on the number of proofs.
     #[must_use]
     pub fn new(store: &'a dyn ProofStore, now: Timestamp) -> Self {
         Validator {
@@ -305,6 +374,8 @@ impl<'a> Validator<'a> {
             skew: Self::DEFAULT_SKEW,
             executor: None,
             replay: None,
+            max_proofs: None,
+            revocations: None,
         }
     }
 
@@ -336,9 +407,35 @@ impl<'a> Validator<'a> {
         self
     }
 
+    /// Refuse invocations that name more than `max` proofs.
+    ///
+    /// UCAN has no depth limit in the token, so this is the executor's own
+    /// policy and it applies to every chain alike.
+    #[must_use]
+    pub const fn max_proofs(mut self, max: usize) -> Self {
+        self.max_proofs = Some(max);
+        self
+    }
+
+    /// Refuse chains holding a delegation that `store` says is revoked.
+    #[must_use]
+    pub const fn revocations(mut self, store: &'a dyn RevocationStore) -> Self {
+        self.revocations = Some(store);
+        self
+    }
+
     /// Run every check. Stops at the first failure.
     pub fn validate(&mut self, invocation: &Invocation) -> Result<Proof, ValidationError> {
         let subject = invocation.subject();
+
+        // 0: before anything is looked up or verified, so that a long chain
+        // costs nothing to refuse.
+        if let Some(max) = self.max_proofs {
+            let count = invocation.proofs().len();
+            if count > max {
+                return Err(ValidationError::TooManyProofs { count, max });
+            }
+        }
 
         // 1, 2: every proof resolves, and there is at least one.
         let chain = invocation
@@ -350,51 +447,13 @@ impl<'a> Validator<'a> {
                     .ok_or(ValidationError::MissingProof(*cid))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let root = chain.first().ok_or(ValidationError::EmptyChain)?;
 
-        // 3, 4: the root is issued by the subject and is not a powerline.
-        if !root.issuer().same_principal(subject) {
-            return Err(ValidationError::RootNotSubject {
-                issuer: root.issuer().clone(),
-                subject: subject.clone(),
-            });
-        }
-        if matches!(root.subject(), Subject::Powerline) {
-            return Err(ValidationError::PowerlineAtRoot);
-        }
-
-        // 5: subjects align. A powerline inherits its predecessor's subject,
-        // which by induction is the invocation's.
-        for (i, delegation) in chain.iter().enumerate() {
-            if let Subject::Did(did) = delegation.subject() {
-                if !did.same_principal(subject) {
-                    return Err(ValidationError::SubjectMismatch { hop: Hop::Proof(i) });
-                }
-            }
-        }
-
-        // 6, 7: each hop's audience issues the next token, and each hop's
-        // command covers the next token's.
-        for (i, delegation) in chain.iter().enumerate() {
-            let (next_issuer, next_command) = match chain.get(i + 1) {
-                Some(next) => (next.issuer(), next.command()),
-                None => (invocation.issuer(), invocation.command()),
-            };
-            if !delegation.audience().same_principal(next_issuer) {
-                return Err(ValidationError::PrincipalMismatch {
-                    hop: Hop::Proof(i),
-                    audience: delegation.audience().clone(),
-                    issuer: next_issuer.clone(),
-                });
-            }
-            if !delegation.command().covers(next_command) {
-                return Err(ValidationError::CommandNotCovered {
-                    hop: Hop::Proof(i),
-                    granted: delegation.command().clone(),
-                    requested: next_command.clone(),
-                });
-            }
-        }
+        // 2 to 7.
+        check_structure(
+            &chain,
+            subject,
+            Some((invocation.issuer(), invocation.command())),
+        )?;
 
         // 8: every token is inside its validity window.
         for (i, delegation) in chain.iter().enumerate() {
@@ -407,14 +466,13 @@ impl<'a> Validator<'a> {
             .map_err(|e| time_error(Hop::Invocation, e))?;
 
         // 9: every signature verifies under its issuer's key.
-        for (i, delegation) in chain.iter().enumerate() {
-            delegation
-                .verify(&self.resolver)
-                .map_err(|e| signature_error(Hop::Proof(i), e))?;
-        }
+        self.verify_chain(&chain)?;
         invocation
             .verify(&self.resolver)
             .map_err(|e| signature_error(Hop::Invocation, e))?;
+
+        // 9a: no delegation in the chain has been revoked.
+        self.check_revocations(&chain)?;
 
         // 10: the arguments satisfy every policy in the chain.
         let args = Ipld::Map(invocation.args().clone());
@@ -451,6 +509,90 @@ impl<'a> Validator<'a> {
             invocation: *invocation.cid(),
         })
     }
+
+    fn verify_chain(&self, chain: &[Delegation]) -> Result<(), ValidationError> {
+        for (i, delegation) in chain.iter().enumerate() {
+            delegation
+                .verify(&self.resolver)
+                .map_err(|e| signature_error(Hop::Proof(i), e))?;
+        }
+        Ok(())
+    }
+
+    /// Asks about each delegation's own CID rather than the link in `prf`,
+    /// which a store may resolve from another CID of the same bytes.
+    fn check_revocations(&self, chain: &[Delegation]) -> Result<(), ValidationError> {
+        let Some(revocations) = self.revocations else {
+            return Ok(());
+        };
+        for (i, delegation) in chain.iter().enumerate() {
+            if revocations.is_revoked(delegation.cid()) {
+                return Err(ValidationError::Revoked {
+                    hop: Hop::Proof(i),
+                    cid: *delegation.cid(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The checks on the shape of a chain, which look at no signature. `last` is
+/// the issuer and command of the token the last hop was given for, if any.
+fn check_structure(
+    chain: &[Delegation],
+    subject: &Did,
+    last: Option<(&Did, &Command)>,
+) -> Result<(), ValidationError> {
+    let root = chain.first().ok_or(ValidationError::EmptyChain)?;
+
+    // 3, 4: the root is issued by the subject and is not a powerline.
+    if !root.issuer().same_principal(subject) {
+        return Err(ValidationError::RootNotSubject {
+            issuer: root.issuer().clone(),
+            subject: subject.clone(),
+        });
+    }
+    if matches!(root.subject(), Subject::Powerline) {
+        return Err(ValidationError::PowerlineAtRoot);
+    }
+
+    // 5: subjects align. A powerline inherits its predecessor's subject,
+    // which by induction is the invocation's.
+    for (i, delegation) in chain.iter().enumerate() {
+        if let Subject::Did(did) = delegation.subject() {
+            if !did.same_principal(subject) {
+                return Err(ValidationError::SubjectMismatch { hop: Hop::Proof(i) });
+            }
+        }
+    }
+
+    // 6, 7: each hop's audience issues the next token, and each hop's
+    // command covers the next token's.
+    for (i, delegation) in chain.iter().enumerate() {
+        let next = chain
+            .get(i + 1)
+            .map(|next| (next.issuer(), next.command()))
+            .or(last);
+        let Some((next_issuer, next_command)) = next else {
+            continue;
+        };
+        if !delegation.audience().same_principal(next_issuer) {
+            return Err(ValidationError::PrincipalMismatch {
+                hop: Hop::Proof(i),
+                audience: delegation.audience().clone(),
+                issuer: next_issuer.clone(),
+            });
+        }
+        if !delegation.command().covers(next_command) {
+            return Err(ValidationError::CommandNotCovered {
+                hop: Hop::Proof(i),
+                granted: delegation.command().clone(),
+                requested: next_command.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn time_error(hop: Hop, error: Error) -> ValidationError {

@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `Validator::max_proofs`, an optional limit on the number of proofs an
+  invocation may name. It is checked before any lookup and fails with
+  `ValidationError::TooManyProofs`. There is no limit unless one is set.
+- `Validator::revocations`, an optional check of every delegation in a chain
+  against a `RevocationStore`, failing with `ValidationError::Revoked`.
+  `MemoryRevocationStore` keeps them in memory. Nothing is checked unless a
+  store is attached.
+- `Validator::check_revocation`, which reads a `/ucan/revoke` invocation and
+  accepts it only if it is signed and its issuer may revoke the delegation it
+  names, given that delegation's chain: the delegation's issuer, an issuer above
+  it, or a holder of a delegated `/ucan/revoke`. A refusal is a named
+  `RevocationError`. Other implementations have no `/ucan/revoke` yet, so this
+  has no fixture, and the Revocation specification is a release candidate that
+  still uses older names. `docs/validation.md` lists how each one was read, and
+  one case the check reports but cannot refuse.
+
+### Documentation
+
+- `like` compares text, so `/data/h1/*` matches
+  `/data/h1/../../../etc/passwd`. The specification requires this, so matching
+  has not changed. `docs/validation.md` explains how to close it, in the
+  executor and in a policy.
+
 ## [0.1.2] - 2026-10-01
 
 ### Added

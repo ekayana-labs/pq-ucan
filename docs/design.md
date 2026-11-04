@@ -160,7 +160,7 @@ same position as the ML-DSA headers. DAG-CBOR stays the default.
 | `delegation` | `Delegation`, its payload and builder                              |
 | `invocation` | `Invocation`, its payload and builder                              |
 | `policy`     | Statements, selectors, evaluation                                  |
-| `validate`   | `Validator`, `ProofStore`, `ReplayGuard`                           |
+| `validate`   | `Validator`, `ProofStore`, `ReplayGuard`, `RevocationStore`        |
 
 Dependencies point downward in that table; nothing above `envelope` knows
 about tokens.
