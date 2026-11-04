@@ -38,6 +38,7 @@ stops at the first failure. Positions are `Hop(n)` for the n-th proof
 | 7 | Command attenuation  | `Hop(n).cmd` covers `Hop(n+1).cmd`; the last hop's `cmd` covers the invocation `cmd`.                  | `CommandNotCovered(hop)`         |
 | 8 | Time bounds          | For every hop, `nbf - skew <= now <= exp + skew`. For the invocation, `now <= exp + skew`.             | `NotYetValid(hop)`, `Expired(hop)` |
 | 9 | Signatures           | Every hop's signature and the invocation signature verify under their issuer's resolved key.           | `BadSignature(hop)`, `Unresolvable(hop)` |
+| 9a | Revocation          | If a `RevocationStore` is attached, no hop's CID is revoked.                                           | `Revoked { hop, cid }`           |
 | 10 | Policy              | The invocation `args` satisfy every statement of every hop's policy.                                   | `PolicyRejected { hop, statement }` |
 | 11 | Executor            | If the validator was given its own DID: `aud` when present, else `sub`, equals it.                     | `WrongExecutor`                  |
 | 12 | Replay              | If a `ReplayGuard` is attached, the invocation CID has not been seen. Recorded only after 1-11 pass.  | `Replay`                         |
@@ -45,8 +46,8 @@ stops at the first failure. Positions are `Hop(n)` for the n-th proof
 Ordering rationale: the proof limit costs nothing and protects everything
 after it, so it comes before any lookup; structural failures are cheap and
 give the best diagnostics, so they go next; signatures are the expensive step and
-are checked before policy so that no policy is evaluated for a token
-nobody signed; the replay guard is last so that a rejected invocation
+are checked before revocation and policy so that neither is consulted for a
+token nobody signed; the replay guard is last so that a rejected invocation
 never consumes a nonce.
 
 The result of a successful validation is a `Proof`: the resolved chain,
@@ -150,10 +151,33 @@ The specification requires replay prevention for invocations. The
 guard. Production deployments should back it with something durable and
 prune by `exp`.
 
+## Revocation
+
+`Validator::revocations` takes a `RevocationStore`, which answers one question:
+is this CID revoked? The crate ships an in-memory store. Production deployments
+should back it with something durable, and the executor must hold the
+revocations for which it is the subject.
+
+The check uses the CID computed from each delegation's bytes, which is the
+canonical CID the specification names, and not the link in `prf`. The
+specification says a revoked delegation is ignored, which need not invalidate
+every chain to the same authority. An invocation's `prf` is one line, so
+ignoring a hop breaks it, and the invoker can try again with a chain that avoids
+that delegation.
+
+The store takes the caller's word. The crate does not yet read `ucan/revoke`
+invocations, so before recording one the caller has to check that it is signed
+and that its issuer may revoke: the delegation's issuer, an issuer above it in
+the chain, or someone they delegated `ucan/revoke` to. Recording every
+revocation received would let anyone cut off anyone else.
+
+A store that cannot answer should say the delegation is revoked. Otherwise an
+outage of the store switches revocation off.
+
 ## What is not checked
 
 - That the subject actually controls the resource. The executor is the
   resource, or it asks the resource; the validator cannot know.
 - Semantic conditions (day of week, quota). The specification places
   these in `args` and in execution, not in policy.
-- Revocation. Planned; see the roadmap.
+- Who issued a revocation. That is checked when it enters the store, not here.

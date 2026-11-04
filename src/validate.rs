@@ -3,7 +3,10 @@
 //! The pipeline, its order and its failures are specified in
 //! `docs/validation.md`. Everything here is that document, in code.
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 use core::fmt;
 
 use ipld_core::{cid::Cid, ipld::Ipld};
@@ -109,6 +112,47 @@ impl MemoryReplayGuard {
 impl ReplayGuard for MemoryReplayGuard {
     fn record(&mut self, cid: &Cid, expiry: Expiry) -> bool {
         self.seen.insert(*cid, expiry).is_none()
+    }
+}
+
+/// Says whether a delegation has been revoked.
+///
+/// The validator asks about the CID of each delegation in a chain. It does not
+/// judge the revocations themselves: whoever fills the store decides which
+/// ones count. See `docs/validation.md`.
+pub trait RevocationStore {
+    /// Whether the delegation with this CID has been revoked. A store that
+    /// cannot tell should answer `true`, so that an outage refuses requests
+    /// rather than letting a revoked chain through.
+    fn is_revoked(&self, cid: &Cid) -> bool;
+}
+
+/// Revocations held in memory.
+///
+/// There is no way to take one back: the specification makes a revocation
+/// irreversible, and a mistake is fixed by issuing a new delegation.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryRevocationStore {
+    revoked: BTreeSet<Cid>,
+}
+
+impl MemoryRevocationStore {
+    /// An empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that the delegation with this CID is revoked. It need not have
+    /// been seen yet, since a revocation can arrive first.
+    pub fn revoke(&mut self, cid: Cid) {
+        self.revoked.insert(cid);
+    }
+}
+
+impl RevocationStore for MemoryRevocationStore {
+    fn is_revoked(&self, cid: &Cid) -> bool {
+        self.revoked.contains(cid)
     }
 }
 
@@ -227,6 +271,15 @@ pub enum ValidationError {
         hop: Hop,
     },
 
+    /// A delegation in the chain has been revoked.
+    #[error("{hop}: delegation {cid} has been revoked")]
+    Revoked {
+        /// Where.
+        hop: Hop,
+        /// The revoked delegation.
+        cid: Cid,
+    },
+
     /// The arguments fail a delegation's policy.
     #[error("{hop}: policy statement {statement} rejected the arguments")]
     PolicyRejected {
@@ -298,6 +351,7 @@ pub struct Validator<'a> {
     executor: Option<&'a Did>,
     replay: Option<&'a mut dyn ReplayGuard>,
     max_proofs: Option<usize>,
+    revocations: Option<&'a dyn RevocationStore>,
 }
 
 impl<'a> Validator<'a> {
@@ -305,8 +359,8 @@ impl<'a> Validator<'a> {
     pub const DEFAULT_SKEW: u32 = 60;
 
     /// A validator over `store` at time `now`, resolving `did:key` only,
-    /// with the default skew, checking neither executor nor replay, and with
-    /// no limit on the number of proofs.
+    /// with the default skew, checking neither executor, replay nor
+    /// revocation, and with no limit on the number of proofs.
     #[must_use]
     pub fn new(store: &'a dyn ProofStore, now: Timestamp) -> Self {
         Validator {
@@ -317,6 +371,7 @@ impl<'a> Validator<'a> {
             executor: None,
             replay: None,
             max_proofs: None,
+            revocations: None,
         }
     }
 
@@ -355,6 +410,13 @@ impl<'a> Validator<'a> {
     #[must_use]
     pub const fn max_proofs(mut self, max: usize) -> Self {
         self.max_proofs = Some(max);
+        self
+    }
+
+    /// Refuse chains holding a delegation that `store` says is revoked.
+    #[must_use]
+    pub const fn revocations(mut self, store: &'a dyn RevocationStore) -> Self {
+        self.revocations = Some(store);
         self
     }
 
@@ -447,6 +509,9 @@ impl<'a> Validator<'a> {
             .verify(&self.resolver)
             .map_err(|e| signature_error(Hop::Invocation, e))?;
 
+        // 9a: no delegation in the chain has been revoked.
+        self.check_revocations(&chain)?;
+
         // 10: the arguments satisfy every policy in the chain.
         let args = Ipld::Map(invocation.args().clone());
         for (i, delegation) in chain.iter().enumerate() {
@@ -481,6 +546,23 @@ impl<'a> Validator<'a> {
             subject: subject.clone(),
             invocation: *invocation.cid(),
         })
+    }
+
+    /// Asks about each delegation's own CID rather than the link in `prf`,
+    /// which a store may resolve from another CID of the same bytes.
+    fn check_revocations(&self, chain: &[Delegation]) -> Result<(), ValidationError> {
+        let Some(revocations) = self.revocations else {
+            return Ok(());
+        };
+        for (i, delegation) in chain.iter().enumerate() {
+            if revocations.is_revoked(delegation.cid()) {
+                return Err(ValidationError::Revoked {
+                    hop: Hop::Proof(i),
+                    cid: *delegation.cid(),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

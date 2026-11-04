@@ -7,6 +7,8 @@
     clippy::panic
 )]
 
+use core::cell::Cell;
+
 use pq_ucan::{
     command::Command,
     crypto::{ed25519::Ed25519Keypair, Signer},
@@ -15,7 +17,10 @@ use pq_ucan::{
     nonce::Nonce,
     policy::Policy,
     time::Timestamp,
-    validate::{MemoryReplayGuard, MemoryStore, ValidationError, Validator},
+    validate::{
+        Hop, MemoryReplayGuard, MemoryRevocationStore, MemoryStore, ProofStore, RevocationStore,
+        ValidationError, Validator,
+    },
     Cid, Ipld,
 };
 
@@ -142,4 +147,138 @@ fn no_proofs_is_still_an_empty_chain_under_a_limit_of_zero() {
             .validate(&chain.invoke_naming([], "/data/file")),
         Err(ValidationError::EmptyChain)
     ));
+}
+
+fn revoking(cid: &Cid) -> MemoryRevocationStore {
+    let mut revocations = MemoryRevocationStore::new();
+    revocations.revoke(*cid);
+    revocations
+}
+
+#[test]
+fn a_revoked_delegation_passes_without_a_store() {
+    let chain = Chain::new(3);
+    assert!(Validator::new(&chain.store(), now())
+        .validate(&chain.invoke("/data/file"))
+        .is_ok());
+}
+
+#[test]
+fn a_revocation_at_any_hop_rejects_the_chain_and_names_the_hop() {
+    let chain = Chain::new(3);
+    let store = chain.store();
+    let inv = chain.invoke("/data/file");
+    for (hop, link) in chain.links.iter().enumerate() {
+        let revocations = revoking(link.cid());
+        match Validator::new(&store, now())
+            .revocations(&revocations)
+            .validate(&inv)
+        {
+            Err(ValidationError::Revoked { hop: at, cid }) => {
+                assert_eq!(at, Hop::Proof(hop));
+                assert_eq!(cid, *link.cid());
+            }
+            other => panic!("hop {hop}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_revocation_elsewhere_does_not_touch_this_chain() {
+    let chain = Chain::new(3);
+    let elsewhere = Delegation::builder(chain.keys[1].did(), Subject::Powerline, cmd())
+        .nonce(Nonce::from_bytes(&[77; 12]))
+        .expires_at(now().plus_seconds(3600))
+        .sign(&chain.keys[0])
+        .unwrap();
+    let revocations = revoking(elsewhere.cid());
+    assert!(Validator::new(&chain.store(), now())
+        .revocations(&revocations)
+        .validate(&chain.invoke("/data/file"))
+        .is_ok());
+}
+
+/// Resolves any CID with the right digest, as a store keyed by hash does.
+struct ByHash(Vec<Delegation>);
+
+impl ProofStore for ByHash {
+    fn get(&self, cid: &Cid) -> Option<Delegation> {
+        self.0
+            .iter()
+            .find(|link| link.cid().hash() == cid.hash())
+            .cloned()
+    }
+}
+
+#[test]
+fn a_revoked_delegation_named_by_another_cid_is_still_revoked() {
+    const RAW: u64 = 0x55;
+    let chain = Chain::new(2);
+    let store = ByHash(chain.links.clone());
+    let aliases = chain
+        .links
+        .iter()
+        .map(|link| Cid::new_v1(RAW, *link.cid().hash()));
+    let inv = chain.invoke_naming(aliases, "/data/file");
+    assert!(Validator::new(&store, now()).validate(&inv).is_ok());
+
+    let revocations = revoking(chain.links[1].cid());
+    assert!(matches!(
+        Validator::new(&store, now()).revocations(&revocations).validate(&inv),
+        Err(ValidationError::Revoked { hop: Hop::Proof(1), cid }) if cid == *chain.links[1].cid()
+    ));
+}
+
+#[test]
+fn a_revoked_chain_is_not_recorded_by_the_guard() {
+    let chain = Chain::new(3);
+    let store = chain.store();
+    let inv = chain.invoke("/data/file");
+    let revocations = revoking(chain.links[0].cid());
+    let mut guard = MemoryReplayGuard::new();
+
+    assert!(Validator::new(&store, now())
+        .revocations(&revocations)
+        .replay_guard(&mut guard)
+        .validate(&inv)
+        .is_err());
+    assert!(Validator::new(&store, now())
+        .replay_guard(&mut guard)
+        .validate(&inv)
+        .is_ok());
+}
+
+#[derive(Default)]
+struct Counting(Cell<usize>);
+
+impl RevocationStore for Counting {
+    fn is_revoked(&self, _: &Cid) -> bool {
+        self.0.set(self.0.get() + 1);
+        false
+    }
+}
+
+#[test]
+fn the_store_is_not_asked_about_an_unsigned_chain() {
+    let chain = Chain::new(2);
+    let mut altered = chain.links[0].bytes().to_vec();
+    *altered.last_mut().unwrap() ^= 0x01;
+    let altered = Delegation::decode(&altered).unwrap();
+    let mut store = MemoryStore::new();
+    let cids = [store.insert(altered), store.insert(chain.links[1].clone())];
+    let counting = Counting::default();
+
+    assert!(matches!(
+        Validator::new(&store, now())
+            .revocations(&counting)
+            .validate(&chain.invoke_naming(cids, "/data/file")),
+        Err(ValidationError::BadSignature { hop: Hop::Proof(0) })
+    ));
+    assert_eq!(counting.0.get(), 0);
+
+    assert!(Validator::new(&chain.store(), now())
+        .revocations(&counting)
+        .validate(&chain.invoke("/data/file"))
+        .is_ok());
+    assert_eq!(counting.0.get(), 2);
 }

@@ -11,6 +11,11 @@ adheres to [Semantic Versioning](https://semver.org/).
 - `Validator::max_proofs`, an optional limit on the number of proofs an
   invocation may name. It is checked before any lookup and fails with
   `ValidationError::TooManyProofs`. There is no limit unless one is set.
+- `Validator::revocations`, an optional check of every delegation in a chain
+  against a `RevocationStore`, failing with `ValidationError::Revoked`.
+  `MemoryRevocationStore` keeps them in memory. Nothing is checked unless a
+  store is attached. The crate does not read `ucan/revoke` invocations yet, so
+  the caller decides which revocations go in the store.
 
 ## [0.1.2] - 2026-10-01
 

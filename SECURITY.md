@@ -26,6 +26,7 @@ Concretely:
   to something other than what was signed;
 - a signature that verifies under the wrong algorithm or the wrong key;
 - a replay that a `ReplayGuard` fails to catch;
+- a revoked delegation that passes a validator with a `RevocationStore`;
 - a panic on untrusted input. Tokens, DIDs, policies and arguments all
   arrive from the network.
 
