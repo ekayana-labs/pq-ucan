@@ -126,6 +126,51 @@ Resolution, left to right:
 `*` matches zero or more characters. `\*` is a literal `*`. Every other
 character, whitespace included, matches itself. Matching is whole-string.
 
+### Paths
+
+A pattern compares text and knows nothing about paths. `/data/h1/*` matches
+`/data/h1/../../../etc/passwd`, which names a file outside `/data/h1`. The
+validator accepts that invocation, and an executor that opens the path has
+left the scope the delegation meant to grant.
+
+The crate cannot change this. The specification says the wildcard is zero or
+more characters and that it is the only special character, so a `*` that
+stopped at `..` would disagree with every other implementation about what a
+signed policy means.
+
+If an argument is a path, the executor should refuse it unless it is already in
+normal form, before validating:
+
+```rust
+fn in_normal_form(path: &str) -> bool {
+    path.split('/').all(|segment| segment != ".." && segment != ".")
+}
+```
+
+Refuse it, and do not rewrite it. The arguments are signed, so a rewritten
+invocation no longer verifies, and checking one spelling while opening another
+is the same bug again. Run the check on the form the executor will use, after
+any percent-decoding. It is a check on the text, so symlinks inside the scope
+still need handling where the file is opened.
+
+A delegator can also say this in the policy, where it binds every hop below and
+needs nothing from the executor. A policy is an implicit `and`, so any hop can
+add it:
+
+```json
+[
+  ["like", ".path", "/data/h1/*"],
+  ["not", ["like", ".path", "*/../*"]],
+  ["not", ["like", ".path", "*/.."]]
+]
+```
+
+These only know the spelling they name, so treat them as a second layer and not
+as a replacement for the executor's check.
+
+Keep the separator in the pattern as well. `/data/h1*` also matches
+`/data/h1-private/key`.
+
 ### Numbers
 
 `1`, `1.0` and `1.00` are equal. Comparisons between an integer and a

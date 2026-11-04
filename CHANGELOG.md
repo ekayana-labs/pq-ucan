@@ -17,6 +17,13 @@ adheres to [Semantic Versioning](https://semver.org/).
   store is attached. The crate does not read `ucan/revoke` invocations yet, so
   the caller decides which revocations go in the store.
 
+### Documentation
+
+- `like` compares text, so `/data/h1/*` matches
+  `/data/h1/../../../etc/passwd`. The specification requires this, so matching
+  has not changed. `docs/validation.md` explains how to close it, in the
+  executor and in a policy.
+
 ## [0.1.2] - 2026-10-01
 
 ### Added

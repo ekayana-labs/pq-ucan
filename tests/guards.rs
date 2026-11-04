@@ -15,7 +15,7 @@ use pq_ucan::{
     delegation::{Delegation, Subject},
     invocation::Invocation,
     nonce::Nonce,
-    policy::Policy,
+    policy::{Pattern, Policy, Selector, Statement},
     time::Timestamp,
     validate::{
         Hop, MemoryReplayGuard, MemoryRevocationStore, MemoryStore, ProofStore, RevocationStore,
@@ -281,4 +281,56 @@ fn the_store_is_not_asked_about_an_unsigned_chain() {
         .validate(&chain.invoke("/data/file"))
         .is_ok());
     assert_eq!(counting.0.get(), 2);
+}
+
+const CLIMBS_OUT: &str = "/data/h1/../../../etc/passwd";
+
+fn path_like(pattern: &str) -> Statement {
+    Statement::Like(Selector::parse(".path").unwrap(), Pattern::parse(pattern))
+}
+
+fn in_normal_form(path: &str) -> bool {
+    path.split('/')
+        .all(|segment| segment != ".." && segment != ".")
+}
+
+#[test]
+fn the_glob_lets_a_path_climb_out_and_the_documented_check_stops_it() {
+    let chain = Chain::with_root_policy(2, Policy::new(vec![path_like("/data/h1/*")]));
+    let store = chain.store();
+
+    let inv = chain.invoke(CLIMBS_OUT);
+    assert!(Validator::new(&store, now()).validate(&inv).is_ok());
+    let Some(Ipld::String(path)) = inv.args().get("path") else {
+        panic!("the invocation has a path");
+    };
+    assert!(!in_normal_form(path));
+
+    assert!(in_normal_form("/data/h1/file"));
+    assert!(!in_normal_form("/data/h1/.."));
+    assert!(!in_normal_form("/data/./h1/file"));
+}
+
+#[test]
+fn a_policy_can_refuse_parent_segments() {
+    let policy = Policy::new(vec![
+        path_like("/data/h1/*"),
+        Statement::Not(Box::new(path_like("*/../*"))),
+        Statement::Not(Box::new(path_like("*/.."))),
+    ]);
+    let chain = Chain::with_root_policy(2, policy);
+    let store = chain.store();
+
+    assert!(Validator::new(&store, now())
+        .validate(&chain.invoke("/data/h1/notes..txt"))
+        .is_ok());
+    for (path, statement) in [(CLIMBS_OUT, 1), ("/data/h1/..", 2)] {
+        match Validator::new(&store, now()).validate(&chain.invoke(path)) {
+            Err(ValidationError::PolicyRejected {
+                hop: Hop::Proof(0),
+                statement: at,
+            }) => assert_eq!(at, statement, "{path}"),
+            other => panic!("{path}: {other:?}"),
+        }
+    }
 }

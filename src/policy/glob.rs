@@ -3,6 +3,16 @@ use core::fmt;
 
 /// A `like` pattern: `*` matches any run of characters, `\*` is a literal
 /// star, everything else matches itself.
+///
+/// This compares text, as the specification defines it. A pattern knows nothing
+/// about paths, so a path can match and still name a file outside the prefix.
+/// `docs/validation.md` has what to do about that.
+///
+/// ```
+/// use pq_ucan::policy::Pattern;
+///
+/// assert!(Pattern::parse("/data/*").matches("/data/../etc/passwd"));
+/// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Pattern {
     text: Box<str>,
