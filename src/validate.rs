@@ -21,6 +21,10 @@ use crate::{
     Error,
 };
 
+mod revocation;
+
+pub use revocation::{AcceptedRevocation, Revocation, RevocationError, REVOKE_COMMAND};
+
 /// Where a validator finds the delegations an invocation names.
 pub trait ProofStore {
     /// The delegation with this CID, if held.
@@ -117,9 +121,9 @@ impl ReplayGuard for MemoryReplayGuard {
 
 /// Says whether a delegation has been revoked.
 ///
-/// The validator asks about the CID of each delegation in a chain. It does not
-/// judge the revocations themselves: whoever fills the store decides which
-/// ones count. See `docs/validation.md`.
+/// The validator asks about the CID of each delegation in a chain. The store
+/// takes the caller's word for what goes in it, so run a signed revocation
+/// through [`Validator::check_revocation`] first. See `docs/validation.md`.
 pub trait RevocationStore {
     /// Whether the delegation with this CID has been revoked. A store that
     /// cannot tell should answer `true`, so that an outage refuses requests
