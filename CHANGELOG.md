@@ -14,8 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 - `Validator::revocations`, an optional check of every delegation in a chain
   against a `RevocationStore`, failing with `ValidationError::Revoked`.
   `MemoryRevocationStore` keeps them in memory. Nothing is checked unless a
-  store is attached. The crate does not read `ucan/revoke` invocations yet, so
-  the caller decides which revocations go in the store.
+  store is attached.
+- `Validator::check_revocation`, which reads a `/ucan/revoke` invocation and
+  accepts it only if it is signed and its issuer may revoke the delegation it
+  names, given that delegation's chain: the delegation's issuer, an issuer above
+  it, or a holder of a delegated `/ucan/revoke`. A refusal is a named
+  `RevocationError`. Other implementations have no `/ucan/revoke` yet, so this
+  has no fixture, and the Revocation specification is a release candidate that
+  still uses older names. `docs/validation.md` lists how each one was read, and
+  one case the check reports but cannot refuse.
 
 ### Documentation
 

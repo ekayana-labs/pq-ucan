@@ -160,7 +160,9 @@ let proof = Validator::new(&store, now)
 ```
 
 `revocations` refuses a chain holding a revoked delegation. The store only
-answers whether a CID is revoked, so you decide which revocations go in it.
+answers whether a CID is revoked, so run a `/ucan/revoke` invocation through
+`Validator::check_revocation` before recording it.
+[docs/validation.md](docs/validation.md#taking-a-revocation-in) has the details.
 `max_proofs` is your own limit on chain length, since UCAN has no limit in the
 token.
 

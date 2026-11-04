@@ -13,8 +13,11 @@ DAG-JSON presentation of tokens.
 
 - Receipts and promise pipelining (`ucan/await/*`) per the UCAN Promise
   specification.
-- Reading and checking `ucan/revoke` invocations per the UCAN Revocation
-  specification, to fill the `RevocationStore`.
+- Reading and checking `/ucan/revoke` invocations per the UCAN Revocation
+  specification, to fill the `RevocationStore`: done in
+  `Validator::check_revocation`. Still open: a store that scopes a revocation to
+  chains containing the revoker, once the specification settles on that, and a
+  fixture from another implementation once one exists.
 - A `did:web` resolver behind a `resolve-web` feature.
 - A pure-Rust ML-DSA backend (RustCrypto `ml-dsa`) so post-quantum
   principals work on `wasm32` and in `no_std`.
