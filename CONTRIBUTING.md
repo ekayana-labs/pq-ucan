@@ -12,6 +12,14 @@ cargo doc --no-deps
 
 `ml-dsa` builds `aws-lc-rs`, which needs a C compiler and CMake.
 
+The fuzz targets in `fuzz/` need nightly and `cargo-fuzz`. Start from the checked
+in inputs, and turn anything they find into a test in `tests/`:
+
+```console
+cd fuzz
+cargo +nightly fuzz run token corpus/token seeds/token -- -max_len=16384
+```
+
 ## Rules of the road
 
 - **The specification decides.** When the code and the UCAN, Delegation,

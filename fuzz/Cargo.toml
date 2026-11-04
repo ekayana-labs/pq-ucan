@@ -1,0 +1,52 @@
+[package]
+name = "pq-ucan-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ipld-core = { version = "0.4", features = ["serde"] }
+libfuzzer-sys = "0.4"
+pq-ucan = { path = "..", features = ["ml-dsa"] }
+serde_ipld_dagcbor = "0.7"
+serde_ipld_dagjson = "0.2"
+
+[workspace]
+
+[[bin]]
+name = "dag_cbor"
+path = "fuzz_targets/dag_cbor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dag_json"
+path = "fuzz_targets/dag_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token"
+path = "fuzz_targets/token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text"
+path = "fuzz_targets/text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy"
+path = "fuzz_targets/policy.rs"
+test = false
+doc = false
+bench = false
