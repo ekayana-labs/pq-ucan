@@ -57,15 +57,16 @@ pub enum RevocationError {
     },
 
     /// The revocation's `sub` issued nothing in the chain, so it has no right
-    /// to revoke.
+    /// to revoke and none to hand on.
     #[error("revocation subject {subject} issued nothing in the chain")]
     SubjectNotInChain {
         /// The revocation's `sub`.
         subject: Did,
     },
 
-    /// The revoker issued nothing in the chain.
-    #[error("{revoker} issued nothing in the chain")]
+    /// The revoker issued nothing in the chain and offers no proof that it
+    /// was given `/ucan/revoke`.
+    #[error("{revoker} issued nothing in the chain and offers no proof of /ucan/revoke")]
     NotAuthorized {
         /// Who signed the revocation.
         revoker: Did,
@@ -75,6 +76,10 @@ pub enum RevocationError {
     /// also makes. The hop says which token.
     #[error("{0}")]
     Invalid(#[source] ValidationError),
+
+    /// The proof that the revoker was given `/ucan/revoke` does not hold.
+    #[error("proof of /ucan/revoke: {0}")]
+    Grant(#[source] ValidationError),
 }
 
 /// The arguments of a `/ucan/revoke` invocation. This says nothing about
@@ -143,6 +148,7 @@ pub struct AcceptedRevocation {
     revoker: Did,
     hop: usize,
     last_hop: usize,
+    delegated: bool,
 }
 
 impl AcceptedRevocation {
@@ -162,6 +168,12 @@ impl AcceptedRevocation {
     #[must_use]
     pub const fn hop(&self) -> usize {
         self.hop
+    }
+
+    /// Whether that right reached the revoker through `/ucan/revoke`.
+    #[must_use]
+    pub const fn is_delegated(&self) -> bool {
+        self.delegated
     }
 
     /// Whether the right rests on an issuer between the root and the target.
@@ -184,9 +196,10 @@ impl Validator<'_> {
     /// `subject` is whose revocations are being kept, and it is not read from
     /// the token because a powerline has no subject of its own.
     ///
-    /// The validator's resolver, clock, skew and proof limit apply. The
-    /// executor and replay guard do not: a revocation is idempotent and may
-    /// arrive by gossip.
+    /// The validator's resolver, clock, skew and proof limit apply, and its
+    /// proof store is where the proofs of a delegated `/ucan/revoke` are
+    /// found. The executor and replay guard do not apply: a revocation is
+    /// idempotent and may arrive by gossip.
     pub fn check_revocation(
         &self,
         subject: &Did,
@@ -218,21 +231,43 @@ impl Validator<'_> {
         self.verify_chain(chain).map_err(Invalid)?;
 
         let issued_at = |did: &Did| chain.iter().position(|d| d.issuer().same_principal(did));
-        if issued_at(invocation.subject()).is_none() {
-            return Err(SubjectNotInChain {
-                subject: invocation.subject().clone(),
-            });
-        }
-        let hop = issued_at(invocation.issuer()).ok_or_else(|| NotAuthorized {
-            revoker: invocation.issuer().clone(),
+        let source = issued_at(invocation.subject()).ok_or_else(|| SubjectNotInChain {
+            subject: invocation.subject().clone(),
         })?;
+        let (hop, delegated) = match issued_at(invocation.issuer()) {
+            Some(hop) => (hop, false),
+            None if invocation.proofs().is_empty() => {
+                return Err(NotAuthorized {
+                    revoker: invocation.issuer().clone(),
+                });
+            }
+            None => {
+                self.check_grant(invocation)?;
+                (source, true)
+            }
+        };
 
         Ok(AcceptedRevocation {
             target,
             revoker: invocation.issuer().clone(),
             hop,
             last_hop: chain.len().saturating_sub(1),
+            delegated,
         })
+    }
+
+    /// A `/ucan/revoke` proof is an ordinary invocation chain, rooted in the
+    /// revocation's `sub`.
+    fn check_grant(&self, invocation: &Invocation) -> Result<(), RevocationError> {
+        let mut validator = Validator::new(self.store, self.now)
+            .resolver(self.resolver)
+            .skew(self.skew);
+        validator.max_proofs = self.max_proofs;
+        validator.revocations = self.revocations;
+        validator
+            .validate(invocation)
+            .map(|_| ())
+            .map_err(RevocationError::Grant)
     }
 }
 

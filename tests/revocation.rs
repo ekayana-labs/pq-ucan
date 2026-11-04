@@ -10,11 +10,12 @@
 
 use pq_ucan::{
     command::Command,
-    crypto::{ed25519::Ed25519Keypair, Algorithm, Signer},
+    crypto::{ed25519::Ed25519Keypair, Algorithm, PublicKey, Signer},
     delegation::{Delegation, Subject},
-    did::Did,
+    did::{Did, KeyResolver, ResolveError, Resolver},
     invocation::Invocation,
     nonce::Nonce,
+    policy::Policy,
     time::Timestamp,
     validate::{
         AcceptedRevocation, Hop, MemoryReplayGuard, MemoryRevocationStore, MemoryStore, Revocation,
@@ -64,6 +65,7 @@ struct World {
     carol: Ed25519Keypair,
     dan: Ed25519Keypair,
     mallory: Ed25519Keypair,
+    zelda: Ed25519Keypair,
     alice_bob: Delegation,
     bob_carol: Delegation,
     carol_dan: Delegation,
@@ -81,6 +83,7 @@ impl World {
             carol,
             dan,
             mallory: key(5),
+            zelda: key(6),
         }
     }
 
@@ -110,6 +113,15 @@ fn check(
     Validator::new(&MemoryStore::new(), now()).check_revocation(subject, invocation, chain)
 }
 
+fn only_this(target: &Cid) -> Policy {
+    Policy::from_ipld(&Ipld::List(vec![Ipld::List(vec![
+        Ipld::String("==".into()),
+        Ipld::String(".revoke".into()),
+        Ipld::Link(*target),
+    ])]))
+    .unwrap()
+}
+
 #[test]
 fn the_issuer_of_the_delegation_may_revoke_it() {
     let w = World::new();
@@ -118,6 +130,7 @@ fn the_issuer_of_the_delegation_may_revoke_it() {
     assert_eq!(accepted.target(), w.bob_carol.cid());
     assert_eq!(accepted.revoker(), &w.bob.did());
     assert_eq!(accepted.hop(), 1);
+    assert!(!accepted.is_delegated());
     assert!(!accepted.rests_on_intermediate_issuer());
 }
 
@@ -572,6 +585,340 @@ fn the_proof_limit_applies_to_the_chain() {
             max: 1
         }))
     ));
+}
+
+/// The grant and a revocation under it, through their bytes, as they would
+/// arrive.
+fn over_the_wire(grant: &Delegation, inv: &Invocation) -> (MemoryStore, Invocation) {
+    let mut store = MemoryStore::new();
+    store.insert(Delegation::decode(grant.bytes()).unwrap());
+    (store, Invocation::decode(inv.bytes()).unwrap())
+}
+
+fn grant_of(
+    from: &Ed25519Keypair,
+    to: &Ed25519Keypair,
+    subject: &Ed25519Keypair,
+    command: Command,
+    policy: Policy,
+) -> Delegation {
+    Delegation::builder(to.did(), Subject::Did(subject.did()), command)
+        .policy(policy)
+        .nonce(Nonce::from_bytes(&[8; 12]))
+        .expires_at(now().plus_seconds(3600))
+        .sign(from)
+        .unwrap()
+}
+
+#[test]
+fn a_holder_of_delegated_revoke_may_revoke_what_it_names() {
+    let w = World::new();
+    let target = w.bob_carol.cid();
+    let grant = grant_of(&w.alice, &w.zelda, &w.alice, revoke(), only_this(target));
+    let inv = revoking(target, &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+
+    let accepted = Validator::new(&store, now())
+        .check_revocation(&w.alice.did(), &inv, &w.to_carol())
+        .unwrap();
+    assert!(accepted.is_delegated());
+    assert_eq!(accepted.hop(), 0);
+    assert_eq!(accepted.revoker(), &w.zelda.did());
+    assert!(!accepted.rests_on_intermediate_issuer());
+}
+
+#[test]
+fn a_wider_command_carries_revoke() {
+    let w = World::new();
+    let target = w.bob_carol.cid();
+    for command in [cmd("/ucan"), Command::root()] {
+        let grant = grant_of(&w.alice, &w.zelda, &w.alice, command, Policy::default());
+        let inv = revoking(target, &w.alice.did())
+            .proof(*grant.cid())
+            .sign(&w.zelda)
+            .unwrap();
+        let (store, inv) = over_the_wire(&grant, &inv);
+        assert!(Validator::new(&store, now())
+            .check_revocation(&w.alice.did(), &inv, &w.to_carol())
+            .is_ok());
+    }
+}
+
+/// `sub` says whose right is being used. Bob can hand on his own right to
+/// revoke, in a chain rooted in Bob, though he holds no `/ucan/revoke` from
+/// Alice.
+#[test]
+fn an_intermediate_issuer_may_hand_on_its_own_right() {
+    let w = World::new();
+    let target = w.bob_carol.cid();
+    let grant = grant_of(&w.bob, &w.zelda, &w.bob, revoke(), only_this(target));
+    let inv = revoking(target, &w.bob.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    let accepted = Validator::new(&store, now())
+        .check_revocation(&w.alice.did(), &inv, &w.to_carol())
+        .unwrap();
+    assert!(accepted.is_delegated());
+    assert_eq!(accepted.hop(), 1);
+}
+
+/// With the subject check gone this is the attack: Mallory roots a perfectly
+/// good `/ucan/revoke` chain in herself.
+#[test]
+fn a_grant_from_outside_the_chain_is_refused() {
+    let w = World::new();
+    let target = w.bob_carol.cid();
+    let grant = grant_of(
+        &w.mallory,
+        &w.zelda,
+        &w.mallory,
+        revoke(),
+        only_this(target),
+    );
+    let inv = revoking(target, &w.mallory.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    assert!(matches!(
+        Validator::new(&store, now()).check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::SubjectNotInChain { subject }) if subject == w.mallory.did()
+    ));
+}
+
+#[test]
+fn a_grant_not_rooted_in_the_named_subject_is_refused() {
+    let w = World::new();
+    let target = w.bob_carol.cid();
+    let grant = grant_of(&w.mallory, &w.zelda, &w.alice, revoke(), only_this(target));
+    let inv = revoking(target, &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    assert!(matches!(
+        Validator::new(&store, now()).check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(
+            ValidationError::RootNotSubject { .. }
+        ))
+    ));
+}
+
+#[test]
+fn a_grant_for_another_delegation_is_refused() {
+    let w = World::new();
+    let grant = grant_of(
+        &w.alice,
+        &w.zelda,
+        &w.alice,
+        revoke(),
+        only_this(w.alice_bob.cid()),
+    );
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    assert!(matches!(
+        Validator::new(&store, now()).check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(ValidationError::PolicyRejected {
+            hop: Hop::Proof(0),
+            statement: 0
+        }))
+    ));
+}
+
+#[test]
+fn a_grant_of_another_command_is_refused() {
+    let w = World::new();
+    let grant = grant_of(&w.alice, &w.zelda, &w.alice, read_file(), Policy::default());
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    assert!(matches!(
+        Validator::new(&store, now()).check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(
+            ValidationError::CommandNotCovered { .. }
+        ))
+    ));
+}
+
+#[test]
+fn a_grant_to_someone_else_is_refused() {
+    let w = World::new();
+    let grant = grant_of(&w.alice, &w.bob, &w.alice, revoke(), Policy::default());
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    assert!(matches!(
+        Validator::new(&store, now()).check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(
+            ValidationError::PrincipalMismatch { .. }
+        ))
+    ));
+}
+
+#[test]
+fn a_grant_the_store_does_not_hold_is_refused() {
+    let w = World::new();
+    let grant = grant_of(&w.alice, &w.zelda, &w.alice, revoke(), Policy::default());
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    assert!(matches!(
+        check(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(ValidationError::MissingProof(cid))) if cid == *grant.cid()
+    ));
+}
+
+#[test]
+fn an_expired_grant_is_refused() {
+    let w = World::new();
+    let grant = Delegation::builder(w.zelda.did(), Subject::Did(w.alice.did()), revoke())
+        .nonce(Nonce::from_bytes(&[6; 12]))
+        .expires_at(now().minus_seconds(3600))
+        .sign(&w.alice)
+        .unwrap();
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    assert!(matches!(
+        Validator::new(&store, now()).check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(ValidationError::Expired {
+            hop: Hop::Proof(0),
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn a_revoked_grant_is_refused() {
+    let w = World::new();
+    let grant = grant_of(&w.alice, &w.zelda, &w.alice, revoke(), Policy::default());
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    let mut revoked = MemoryRevocationStore::new();
+    revoked.revoke(*grant.cid());
+    assert!(matches!(
+        Validator::new(&store, now())
+            .revocations(&revoked)
+            .check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(ValidationError::Revoked { .. }))
+    ));
+}
+
+#[test]
+fn the_proof_limit_applies_to_the_grant() {
+    let w = World::new();
+    let mallory_grant = grant_of(&w.alice, &w.mallory, &w.alice, revoke(), Policy::default());
+    let grant = grant_of(&w.mallory, &w.zelda, &w.alice, revoke(), Policy::default());
+    let inv = revoking(w.alice_bob.cid(), &w.alice.did())
+        .proofs([*mallory_grant.cid(), *grant.cid()])
+        .sign(&w.zelda)
+        .unwrap();
+    let mut store = MemoryStore::new();
+    store.insert(mallory_grant);
+    store.insert(grant);
+    let chain = [w.alice_bob.clone()];
+
+    let limited = Validator::new(&store, now()).max_proofs(1);
+    assert!(matches!(
+        limited.check_revocation(&w.alice.did(), &inv, &chain),
+        Err(RevocationError::Grant(ValidationError::TooManyProofs {
+            count: 2,
+            max: 1
+        }))
+    ));
+    assert!(Validator::new(&store, now())
+        .max_proofs(2)
+        .check_revocation(&w.alice.did(), &inv, &chain)
+        .is_ok());
+}
+
+#[test]
+fn the_skew_applies_to_the_grant() {
+    let w = World::new();
+    let grant = Delegation::builder(w.zelda.did(), Subject::Did(w.alice.did()), revoke())
+        .nonce(Nonce::from_bytes(&[6; 12]))
+        .expires_at(now().minus_seconds(30))
+        .sign(&w.alice)
+        .unwrap();
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*grant.cid())
+        .sign(&w.zelda)
+        .unwrap();
+    let (store, inv) = over_the_wire(&grant, &inv);
+    assert!(Validator::new(&store, now())
+        .check_revocation(&w.alice.did(), &inv, &w.to_carol())
+        .is_ok());
+    assert!(matches!(
+        Validator::new(&store, now())
+            .skew(0)
+            .check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(ValidationError::Expired { .. }))
+    ));
+}
+
+struct Refusing(Did);
+
+impl Resolver for Refusing {
+    fn resolve(&self, did: &Did) -> Result<PublicKey, ResolveError> {
+        if did.same_principal(&self.0) {
+            return Err(ResolveError::NotFound);
+        }
+        KeyResolver.resolve(did)
+    }
+}
+
+#[test]
+fn the_resolver_applies_to_the_grant() {
+    let w = World::new();
+    let mallory_grant = grant_of(&w.alice, &w.mallory, &w.alice, revoke(), Policy::default());
+    let grant = grant_of(&w.mallory, &w.zelda, &w.alice, revoke(), Policy::default());
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proofs([*mallory_grant.cid(), *grant.cid()])
+        .sign(&w.zelda)
+        .unwrap();
+    let mut store = MemoryStore::new();
+    store.insert(mallory_grant);
+    store.insert(grant);
+    let refusing = Refusing(w.mallory.did());
+    assert!(matches!(
+        Validator::new(&store, now())
+            .resolver(&refusing)
+            .check_revocation(&w.alice.did(), &inv, &w.to_carol()),
+        Err(RevocationError::Grant(ValidationError::Unresolvable {
+            hop: Hop::Proof(1),
+            ..
+        }))
+    ));
+}
+
+/// An issuer's right comes from the chain, so `prf` adds nothing to it. The
+/// specification's example carries both.
+#[test]
+fn an_issuer_does_not_need_its_proofs_to_resolve() {
+    let w = World::new();
+    let inv = revoking(w.bob_carol.cid(), &w.alice.did())
+        .proof(*w.carol_dan.cid())
+        .sign(&w.bob)
+        .unwrap();
+    assert!(check(&w.alice.did(), &inv, &w.to_carol()).is_ok());
 }
 
 #[test]
