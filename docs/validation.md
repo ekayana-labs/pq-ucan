@@ -38,7 +38,7 @@ stops at the first failure. Positions are `Hop(n)` for the n-th proof
 | 7 | Command attenuation  | `Hop(n).cmd` covers `Hop(n+1).cmd`; the last hop's `cmd` covers the invocation `cmd`.                  | `CommandNotCovered(hop)`         |
 | 8 | Time bounds          | For every hop, `nbf - skew <= now <= exp + skew`. For the invocation, `now <= exp + skew`.             | `NotYetValid(hop)`, `Expired(hop)` |
 | 9 | Signatures           | Every hop's signature and the invocation signature verify under their issuer's resolved key.           | `BadSignature(hop)`, `Unresolvable(hop)` |
-| 9a | Revocation          | If a `RevocationStore` is attached, no hop's CID is revoked.                                           | `Revoked { hop, cid }`           |
+| 9a | Revocation          | If a `RevocationStore` is attached, no hop's CID is revoked for this chain's issuers.                  | `Revoked { hop, cid }`           |
 | 10 | Policy              | The invocation `args` satisfy every statement of every hop's policy.                                   | `PolicyRejected { hop, statement }` |
 | 11 | Executor            | If the validator was given its own DID: `aud` when present, else `sub`, equals it.                     | `WrongExecutor`                  |
 | 12 | Replay              | If a `ReplayGuard` is attached, the invocation CID has not been seen. Recorded only after 1-11 pass.  | `Replay`                         |
@@ -199,7 +199,8 @@ prune by `exp`.
 ## Revocation
 
 `Validator::revocations` takes a `RevocationStore`, which answers one question:
-is this CID revoked? The crate ships an in-memory store. Production deployments
+is this CID revoked for a chain with these issuers? The crate ships an in-memory
+store. Production deployments
 should back it with something durable, and the executor must hold the
 revocations for which it is the subject.
 
@@ -223,7 +224,7 @@ invocation has `path`, `Revocation::read(invocation)?.path()` names them.
 
 ```rust
 let accepted = validator.check_revocation(&me, &invocation, &chain)?;
-revoked.revoke(*accepted.target());
+revoked.record(&accepted);
 ```
 
 It runs these in order and stops at the first failure. Failures in `Invalid` and
@@ -244,8 +245,8 @@ It runs these in order and stops at the first failure. Failures in `Invalid` and
 | 11 | Revoker          | `iss` issued a delegation in the chain, or `prf` is non-empty and passes the whole pipeline above as an invocation of `/ucan/revoke`, so it is rooted in `sub`. | `NotAuthorized`, `Grant(...)` |
 | 12 | Standing         | The hops above the one whose right is used are in their time bounds and, if a store is attached, not revoked. | `Invalid(Expired, NotYetValid, Revoked)` |
 
-The result is an `AcceptedRevocation`: the CID to record, who signed, which hop's
-right was used, and whether it was delegated.
+The result is an `AcceptedRevocation`: the CID to record, who signed, whose right
+was used, whether it was delegated, and when the target expires.
 
 The time bounds in check 12 stop at the hop whose right is used. A delegation that
 has expired or not yet begun can still be revoked, and someone whose grant was
@@ -271,25 +272,46 @@ The specification says an issuer above a delegation may revoke it. A UCAN 1.0
 delegation has no ancestors of its own though: a chain exists only when someone
 presents one, and anyone can sign a delegation to anyone without their consent.
 So Mallory, if she really holds `/mcp/read_file` from Alice, can sign the same
-command to Bob and present Alice → Mallory → Bob → Carol. She has a good path to
-Bob's delegation to Carol. The check accepts it, and because the store is keyed by
-CID that delegation is now revoked on Alice → Bob → Carol as well, a chain Mallory
-is not in.
+command to Bob and present Alice → Mallory → Bob → Carol. That is a good path to
+Bob's delegation to Carol, and the check accepts it.
 
-The check does narrow this. She must hold authority over the same subject and a
-command that covers the target's, she cannot do it from downstream alone since
-loops are refused, and she cannot do it once her own grant has lapsed. It does
-not close it, and nothing can while the store is keyed only by CID. The Revocation
-specification's own pseudocode scopes a revocation to chains that contain the
-revoker, but its Store text, and the UCAN specification's section on memoized
-validation, say a match on the CID is enough. The crate follows the latter for
-now.
+So a path cannot show that a revoker has a say over a delegation everywhere. It
+shows only that the revoker has a say in chains they are in. A revocation
+therefore reaches only chains its authority issued in: the store is given the
+chain's issuers, and Mallory's revocation breaks Alice → Mallory → Bob → Carol and
+leaves Alice → Bob → Carol alone.
 
-The case is reported: `AcceptedRevocation::rests_on_intermediate_issuer` is true
-when the right comes from an issuer between the root and the target. Nothing else
-can be manufactured this way. The root is the subject, and the target's issuer
-issued the target. A caller for whom this matters can refuse those, at the cost of
-intermediate issuers having to go to the subject or to the target's issuer.
+| Who revokes                     | Authority recorded | Reaches                                     |
+|---------------------------------|--------------------|---------------------------------------------|
+| The root, who is the subject    | The root           | Every chain, since the root is in all of them |
+| The delegation's issuer         | That issuer        | Every chain holding the delegation, since its issuer is in all of them |
+| An issuer between the two       | That issuer        | Chains that issuer is in. Others are the second film ticket in the specification |
+| A holder of `/ucan/revoke`      | The revocation's `sub` | Chains `sub` is in                      |
+
+The authority is the signer when the signer is in the chain, whatever `sub` says.
+If it were `sub`, anyone in a chain could name the root and reach every chain.
+
+`MemoryRevocationStore::revoke(cid)` skips all this and reaches every chain, for a
+caller who has decided by other means, such as an operator acting on a report.
+
+The Revocation specification does not quite agree with itself here. Its Store
+pseudocode and Path Witness section scope a revocation like this, while the
+sentence before the pseudocode, and the UCAN specification's section on memoized
+validation, say a match on the CID is enough. Scoping is the reading under which a
+path means anything, since otherwise holding the same command as someone would be
+enough to cut off everyone they delegated to.
+
+### Keeping the store small
+
+The specification allows dropping a revocation once its target has expired, because
+the target then fails on its time bounds anyway. `MemoryRevocationStore::prune_expired`
+does that for what `record` stored. It keeps what `revoke` stored, since a bare CID
+says nothing about expiry, and targets that never expire.
+
+Scoping limits what a spurious revocation can do and not how many can be sent:
+anyone with authority over a subject can mint delegations and revoke them, each one
+valid and each taking a record. An executor that takes revocations from the network
+should limit them per revoker. `accepted.revoker()` says whom to count.
 
 ### Reading the specification
 
