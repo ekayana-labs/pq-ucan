@@ -70,7 +70,7 @@ jobs:
       - run: cargo generate-lockfile
       # A prebuilt cargo-audit: the audit action would otherwise compile it
       # on every run with whatever toolchain the repository pins.
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-audit
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
